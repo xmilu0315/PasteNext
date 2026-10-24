@@ -1,0 +1,31 @@
+.build/
+.build-*/
+Dist/
+.DS_Store
+.swiftpm/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+
+# ---- Distribution artifacts ----
+*.dmg
+*.app
+
+# ---- Marketing material (上架素材，不纳入开源仓库) ----
+# 海报、截图、文案均属运营物料，源码仓库不需要
+Marketing/
+
+# ---- Local tooling ----
+scripts/dmg/node_modules/
+node_modules/
+
+# ---- Assistant / IDE state ----
+.workbuddy/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ---- Design drafts (not needed to build) ----
+# 图标候选稿共 14MB，仓库只保留最终资源
+Resources/IconOptions/

@@ -1,0 +1,12 @@
+{
+  "name": "pastenext-dmg-builder",
+  "version": "1.0.0",
+  "description": "Vendored appdmg for building PasteNext DMG with a background image",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "appdmg": "^0.6.6"
+  },
+  "private": true
+}
