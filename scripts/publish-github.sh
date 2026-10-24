@@ -38,13 +38,20 @@ if [ -d .git ]; then
     else
         git commit -q -m "Publish PasteNext $VERSION"
     fi
-    # The token is used only for this push and is not stored on disk.
-    git -c "credential.helper=" -c "core.askPass=true" \
-        push -u "$REMOTE" main 2>&1 | sed 's/^/   /' || {
-        # askPass is not portable; fall back to the URL with the token inline.
-        print "   retrying with an inline credential..."
-        git push -u "https://x-access-token:$GITHUB_TOKEN@github.com/$OWNER/$REPO.git" main 2>&1 | sed 's/^/   /'
-    }
+    # The token is passed through GIT_ASKPASS, so it never appears in the
+    # command line, in .git/config or in ~/.git-credentials.
+    ASKPASS="$(mktemp -t pastenext-askpass).XXXXXX"
+    cat > "$ASKPASS" <<'ASK'
+#!/bin/sh
+case "$1" in
+    *sername*) echo "x-access-token" ;;
+    *)         echo "$GITHUB_TOKEN" ;;
+esac
+ASK
+    chmod +x "$ASKPASS"
+    GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0 \
+        git -c "credential.helper=" push -u "$REMOTE" main 2>&1 | sed 's/^/   /'
+    rm -f "$ASKPASS"
 else
     print -u2 "error: $ROOT is not a git repository"
     exit 1
