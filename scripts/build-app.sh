@@ -53,6 +53,12 @@ if [ -z "$NODE_BIN" ]; then
     print -u2 "error: node is required to build the DMG background layout"
     exit 1
 fi
+# The DMG helper writes the .DS_Store with the `ds-store` package; install it
+# on demand so a fresh clone can build without a separate setup step.
+if [ ! -d "$ROOT/scripts/dmg/node_modules/ds-store" ]; then
+    print "installing the DMG build dependencies..."
+    (cd "$ROOT/scripts/dmg" && npm install --silent)
+fi
 # The .DS_Store (background alias, window bounds, icon positions) is written
 # by the node helper, which uses the same format Finder reads.
 "$NODE_BIN" "$ROOT/scripts/dmg/build.mjs" \
