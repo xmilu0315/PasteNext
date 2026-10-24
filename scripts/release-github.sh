@@ -81,7 +81,7 @@ BODY=$(cat <<'MD'
 **隐私：** 不设密码、不上云、不联网，历史仅保存在本机，后台网络请求 0 次。
 MD
 )
-BODY=$(BODY | sed "s/\$VERSION/$VERSION/g")
+BODY=$(printf '%s' "$BODY" | sed "s/\$VERSION/$VERSION/g")
 
 PAYLOAD=$(python3 - "$VERSION" "$TAG" "$BODY" <<'PY'
 import json, sys
@@ -127,10 +127,17 @@ if [ -z "$RELEASE_ID" ]; then
 fi
 
 print "==> uploading $(basename "$DMG")"
+# The asset upload goes to uploads.github.com; the exact URL is taken from the
+# release's own upload_url so it can never drift.
+UPLOAD_URL=$(curl -sS "${auth[@]}" "$API/repos/$OWNER/$REPO/releases/$RELEASE_ID" \
+    | python3 -c "import json,sys
+u = json.load(sys.stdin).get('upload_url','')
+print(u.split('{')[0])")
+[ -z "$UPLOAD_URL" ] && UPLOAD_URL="https://uploads.github.com/repos/$OWNER/$REPO/releases/$RELEASE_ID/assets"
 curl -sS -X POST "${auth[@]}" \
-    -H "Content-Type: application/x-apple-diskimage" \
+    -H "Content-Type: application/octet-stream" \
     --data-binary "@$DMG" \
-    "$API/repos/$OWNER/$REPO/releases/$RELEASE_ID/assets?name=$(basename "$DMG")" \
+    "$UPLOAD_URL?name=$(basename "$DMG")" \
     | python3 -c "import json,sys
 d = json.load(sys.stdin)
 print('   asset:', d.get('name'), '| size:', d.get('size'), 'bytes')
