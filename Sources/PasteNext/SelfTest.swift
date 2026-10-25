@@ -396,6 +396,22 @@ enum SelfTest {
             expect(store2.items.count == 2, "a copy far apart in time does not merge")
         }
 
+        // ---- Multi-file clips keep their names and folder apart -------------
+        do {
+            let multi = ClipItem(kind: .files, text: "a.pdf\nb.docx",
+                                 filePaths: ["/tmp/x/a.pdf", "/tmp/x/b.docx"])
+            expect(multi.fileNames == ["a.pdf", "b.docx"], "each file keeps its own name")
+            expect(multi.commonDirectory == "/tmp/x", "shared folder is detected once")
+
+            let mixed = ClipItem(kind: .files, text: "",
+                                 filePaths: ["/tmp/x/a.pdf", "/tmp/y/b.docx"])
+            expect(mixed.commonDirectory == nil, "several folders are not collapsed into one")
+
+            let single = ClipItem(kind: .files, text: "a.pdf", filePaths: ["/tmp/x/a.pdf"])
+            expect(single.fileNames == ["a.pdf"], "single file keeps its name")
+            expect(single.commonDirectory == "/tmp/x", "single file folder is detected")
+        }
+
         // ---- Pasting promotes the clip to the front -------------------------
         do {
             let scratch = FileManager.default.temporaryDirectory

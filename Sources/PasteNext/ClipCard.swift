@@ -121,17 +121,56 @@ struct ClipCard: View, Equatable {
         }
     }
 
-    private var filesRow: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "doc.fill").font(.system(size: compact ? 15 : 17)).foregroundColor(.accentColor)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.displayTitle).font(.system(size: compact ? 11 : 13, weight: .medium)).lineLimit(2)
-                if let path = item.filePaths?.first {
-                    // The absolute path, not a second copy of the filename: the
-                    // title already says what the file is called, the path says
-                    // where it lives.
-                    Text(path).font(.system(size: 9)).foregroundColor(.secondary)
+    /// File clips: one row per file, with the shared folder underneath.
+    ///
+    /// Listing every path under every name was unreadable for multi-file
+    /// selections, and collapsing all names onto one line was worse: three long
+    /// file names ran together with no boundary between them.
+    @ViewBuilder private var filesRow: some View {
+        let paths = item.filePaths ?? []
+        if paths.count <= 1 {
+            HStack(spacing: 7) {
+                Image(systemName: "doc.fill")
+                    .font(.system(size: compact ? 15 : 17)).foregroundColor(.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.fileNames.first ?? item.displayTitle)
+                        .font(.system(size: compact ? 11 : 13, weight: .medium))
                         .lineLimit(1).truncationMode(.middle)
+                    if let path = paths.first {
+                        Text(path).font(.system(size: 9)).foregroundColor(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L("\(paths.count) 个文件", "\(paths.count) files"))
+                    .font(.system(size: compact ? 11 : 13, weight: .semibold))
+                    .foregroundColor(.primary)
+
+                ForEach(Array(item.fileNames.prefix(3).enumerated()), id: \.offset) { _, name in
+                    HStack(spacing: 5) {
+                        Image(systemName: "doc.fill")
+                            .font(.system(size: compact ? 8 : 9)).foregroundColor(.accentColor)
+                        Text(name)
+                            .font(.system(size: compact ? 10 : 11))
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                if paths.count > 3 {
+                    Text(L("还有 \(paths.count - 3) 个文件", "\(paths.count - 3) more"))
+                        .font(.system(size: 9)).foregroundColor(.secondary)
+                }
+
+                // One shared folder instead of repeating it under every name.
+                if let folder = item.commonDirectory {
+                    Text(folder)
+                        .font(.system(size: 9)).foregroundColor(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                } else {
+                    Text(L("\(Set(paths.map { URL(fileURLWithPath: $0).deletingLastPathComponent().path }).count) 个位置",
+                           "In \(Set(paths.map { URL(fileURLWithPath: $0).deletingLastPathComponent().path }).count) locations"))
+                        .font(.system(size: 9)).foregroundColor(.secondary)
                 }
             }
         }

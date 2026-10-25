@@ -118,6 +118,19 @@ struct ClipItem: Codable, Identifiable, Equatable {
         self.htmlFilename = htmlFilename
     }
     var effectiveSortIndex: Double { sortIndex ?? createdAt.timeIntervalSinceReferenceDate }
+    /// File names carried by a file clip, in selection order.
+    var fileNames: [String] {
+        (filePaths ?? []).map { ($0 as NSString).lastPathComponent }
+    }
+
+    /// The single folder all files live in, or nil when they come from several.
+    var commonDirectory: String? {
+        let folders = Set((filePaths ?? []).map {
+            URL(fileURLWithPath: $0).deletingLastPathComponent().path
+        })
+        return folders.count == 1 ? folders.first : nil
+    }
+
     /// The text this clip carries, if any.
     ///
     /// A clipboard copy can hold a picture, text and files all at once, so this
