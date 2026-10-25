@@ -238,6 +238,9 @@ final class AppState: ObservableObject {
         NotificationCenter.default.post(name: .hidePasteNextPanel, object: nil)
         PasteService.copy(item, image: store.image(for: item), monitor: monitor, paste: true,
                           plainText: plainText, htmlFragment: store.fragment(named: item.htmlFilename))
+        // Pasting is an explicit "this is the one" — float it to the front so it
+        // becomes ⌘1 and the clipboard already holds it.
+        store.promote(id: item.id)
         statusMessage = L("已粘贴", "Pasted")
     }
     /// ⌘1…⌘9 map onto the most recent **non-pinned** clips. Pinned cards are

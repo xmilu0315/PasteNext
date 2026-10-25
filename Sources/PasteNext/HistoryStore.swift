@@ -46,7 +46,10 @@ final class HistoryStore: ObservableObject {
     /// else is a genuinely new copy and gets its own card.
     func mergeOrAdd(_ item: ClipItem, image: NSImage? = nil, htmlData: Data? = nil) {
         let window: TimeInterval = 8.0
-        guard let last = items.first,
+        // "The previous clip" means the most recently *captured* one, not
+        // whatever sits at index 0: pasting promotes an old card to the front,
+        // and that must not be mistaken for the last copy.
+        guard let last = items.max(by: { $0.createdAt < $1.createdAt }),
               last.sourceBundleID == item.sourceBundleID,
               let gap = Optional(item.createdAt.timeIntervalSince(last.createdAt)),
               gap >= 0, gap < window else {
@@ -157,6 +160,21 @@ final class HistoryStore: ObservableObject {
     func fragment(named name: String?) -> Data? {
         guard let name else { return nil }
         return try? Data(contentsOf: fragmentsDirectory.appendingPathComponent(name))
+    }
+
+    /// Moves a clip to the front of the list.
+    ///
+    /// Pasting a card is the strongest signal that this is the clip the user
+    /// wants, so it becomes the next ⌘1 instead of staying buried in history.
+    func promote(id: UUID) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        var item = items.remove(at: index)
+        let highest = items.compactMap(\.sortIndex).max() ?? Date().timeIntervalSinceReferenceDate
+        item.sortIndex = highest + 1
+        items.insert(item, at: 0)
+        objectWillChange.send()
+        scheduleSave()
+        Diagnostics.log("store.promoted", ["kind": item.kind.rawValue])
     }
 
     /// Attaches a late-arriving remote image to an existing clip.

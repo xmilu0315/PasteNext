@@ -396,6 +396,34 @@ enum SelfTest {
             expect(store2.items.count == 2, "a copy far apart in time does not merge")
         }
 
+        // ---- Pasting promotes the clip to the front -------------------------
+        do {
+            let scratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("pastenext-selftest-promote-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let store = HistoryStore(directory: scratch, load: false)
+            let old = ClipItem(kind: .text, text: "一小时前复制的内容",
+                               createdAt: Date().addingTimeInterval(-3600))
+            store.add(old)
+            store.add(ClipItem(kind: .text, text: "刚复制的内容"))
+            expect(store.items.first?.text == "刚复制的内容", "newest capture starts at the front")
+
+            store.promote(id: old.id)
+            expect(store.items.first?.text == "一小时前复制的内容",
+                   "pasting floats the clip back to the front")
+            expect(AppState.shortcutAssignments(for: store.items)[old.id] == 1,
+                   "the promoted clip becomes ⌘1")
+
+            // A promoted old card must not be mistaken for "the last copy" when
+            // the next clip is captured shortly afterwards.
+            let fresh = ClipItem(kind: .text, text: "提升之后的新复制",
+                                 sourceBundleID: "com.test.same")
+            store.mergeOrAdd(fresh, image: nil, htmlData: nil)
+            expect(store.items.count == 3, "a new capture is not merged into the promoted card")
+            expect(store.items.first?.text == "提升之后的新复制",
+                   "the new capture still lands on top")
+        }
+
         // ---- The data the default selection relies on ----------------------
         // reloadSelection focuses store.items.first, so that must always be the
         // most recent copy.
