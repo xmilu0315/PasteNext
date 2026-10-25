@@ -34,7 +34,13 @@ cp "$ROOT/Resources/donate-wechat.png" "$APP/Contents/Resources/donate-wechat.pn
 cp "$ROOT/Resources/donate-alipay.png" "$APP/Contents/Resources/donate-alipay.png"
 chmod +x "$APP/Contents/MacOS/PasteNext"
 xattr -cr "$APP"
-codesign --force --deep --sign - "$APP"
+# Ad-hoc signing changes the cdhash on every rebuild, which silently invalidates
+# TCC grants (Accessibility, Full Disk Access). A fixed designated requirement
+# keyed on the bundle identifier keeps the grants across rebuilds.
+codesign --force --deep --sign - \
+    --identifier com.pastenext.app \
+    -r='designated => identifier "com.pastenext.app"' \
+    "$APP"
 codesign --verify --deep --strict "$APP"
 
 "$APP/Contents/MacOS/PasteNext" --self-test

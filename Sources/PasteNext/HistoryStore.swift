@@ -50,6 +50,13 @@ final class HistoryStore: ObservableObject {
             add(item, image: image)
             return
         }
+        // A file card is complete on its own. Folding an unrelated image copy
+        // into one destroyed the file clip (the paste then carried a picture
+        // where the document should have been).
+        guard last.kind != .files, item.kind != .files else {
+            add(item, image: image)
+            return
+        }
 
         let lastHasText = last.captionText != nil
         let newHasText = item.captionText != nil

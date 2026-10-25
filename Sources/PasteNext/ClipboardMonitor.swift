@@ -201,42 +201,70 @@ final class ClipboardMonitor: ObservableObject {
 
     /// Reads the clipboard's text without trusting AppKit's flavour mapping.
     ///
-    /// Two traps, both verified against raw bytes:
-    /// 1. When an app publishes UTF-16 text (`public.utf16-external-plain-text`,
-    ///    which Qt-based apps such as WeChat use), the system *derives* a
-    ///    `public.utf8-plain-text` flavour whose bytes are already mangled.
-    ///    Reading `.string` therefore yields mojibake.
+    /// Three traps, all verified against raw bytes or real mojibake in the log:
+    /// 1. When an app publishes UTF-16 text, the system *derives* a
+    ///    `public.utf8-plain-text` whose bytes are already mangled, so reading
+    ///    `.string` yields mojibake.
     /// 2. Despite its name, `public.utf16-external-plain-text` frequently holds
-    ///    **UTF-8** data, so decoding it as UTF-16 produces garbage too.
+    ///    **UTF-8** data.
+    /// 3. `String(data:encoding:.utf16)` assumes **big-endian** when there is no
+    ///    BOM, but apps write little-endian — decoding WeChat's caption that way
+    ///    produced "⺕㥥饑齓…" in the history.
     ///
-    /// So the encoding order is decided per flavour, and a decode that produces
-    /// U+FFFD is rejected in favour of the next candidate.
+    /// The discriminator is structural: UTF-8 never contains 0x00 bytes, while
+    /// UTF-16 text almost always does (every ASCII char has a zero half). So the
+    /// byte order is decided per payload, not per flavour.
     private func readText() -> String {
-        let prioritized: [(NSPasteboard.PasteboardType, [String.Encoding])] = [
-            // macOS writes UTF-8 bytes under this name.
-            (.init("public.utf16-external-plain-text"), [.utf8, .utf16]),
-            // Genuine UTF-16 payloads usually live here.
-            (.init("public.utf16-plain-text"), [.utf16, .utf8]),
-            (.string, [.utf8]),
-            (.init("NSStringPboardType"), [.utf8])
+        let prioritized: [NSPasteboard.PasteboardType] = [
+            .init("public.utf16-external-plain-text"),
+            .init("public.utf16-plain-text"),
+            .string,
+            .init("NSStringPboardType")
         ]
         var fallback = ""
-        for (type, encodings) in prioritized {
+        for type in prioritized {
             guard let data = pasteboard.data(forType: type) else { continue }
-            for encoding in encodings {
-                guard let value = String(data: data, encoding: encoding), !value.isEmpty else { continue }
-                let cleaned = value.trimmingCharacters(in: .controlCharacters)
-                guard !cleaned.isEmpty else { continue }
-                if value.contains("\u{FFFD}") {
-                    // Replacement characters mean this encoding is wrong for the
-                    // payload; remember it as a last resort and keep looking.
-                    if fallback.isEmpty { fallback = cleaned }
-                    continue
-                }
-                return cleaned
+            guard let value = decodeText(data) else { continue }
+            let cleaned = value.trimmingCharacters(in: .controlCharacters)
+            guard !cleaned.isEmpty else { continue }
+            if value.contains("\u{FFFD}") {
+                if fallback.isEmpty { fallback = cleaned }
+                continue
             }
+            return cleaned
         }
         return fallback.isEmpty ? (pasteboard.string(forType: .string) ?? "") : fallback
+    }
+
+    /// Decodes clipboard text bytes, choosing UTF-8 vs UTF-16 (with the correct
+    /// byte order) from the payload itself.
+    private func decodeText(_ data: Data) -> String? {
+        // Honour a byte order mark if there is one.
+        if data.count >= 2 {
+            let b0 = data[data.startIndex], b1 = data[data.index(after: data.startIndex)]
+            if b0 == 0xFF && b1 == 0xFE { return String(data: data, encoding: .utf16LittleEndian) }
+            if b0 == 0xFE && b1 == 0xFF { return String(data: data, encoding: .utf16BigEndian) }
+        }
+        // UTF-8 never contains 0x00; UTF-16 text with any Latin/ASCII content
+        // always does. Zero bytes therefore mean "this is UTF-16".
+        let hasZero = data.contains(0)
+        if !hasZero, let value = String(data: data, encoding: .utf8), !value.isEmpty {
+            return value
+        }
+        if hasZero {
+            // Count zeros per half to pick the byte order: for LE, ASCII chars
+            // put the zero second (odd index).
+            var evenZeros = 0, oddZeros = 0
+            for (offset, byte) in data.enumerated() where byte == 0 {
+                if offset % 2 == 0 { evenZeros += 1 } else { oddZeros += 1 }
+            }
+            let order: String.Encoding = oddZeros >= evenZeros ? .utf16LittleEndian : .utf16BigEndian
+            if let value = String(data: data, encoding: order), !value.isEmpty { return value }
+            let other: String.Encoding = order == .utf16LittleEndian ? .utf16BigEndian : .utf16LittleEndian
+            if let value = String(data: data, encoding: other), !value.isEmpty { return value }
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
     }
 
     private func readFileURLs(from pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> [URL] {

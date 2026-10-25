@@ -206,8 +206,8 @@ struct ContentView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 7) {
-                        ForEach(Array(state.filteredItems.enumerated()), id: \.element.id) { position, item in
-                            clipRow(item, position: position + 1)
+                        ForEach(Array(state.filteredItems.enumerated()), id: \.element.id) { _, item in
+                            clipRow(item, position: state.shortcutAssignments[item.id] ?? 0)
                         }
                     }
                     .animation(.spring(response: 0.32, dampingFraction: 0.82), value: state.filteredItems.map(\.id))

@@ -18,13 +18,32 @@ enum Permissions {
     /// container (WeChat's temp pictures, for instance), which is what makes a
     /// pasted file URL actually resolvable by the target app.
     ///
-    /// There is no public API, so the probe reads the user's TCC database — a
-    /// location only FDA can open.
+    /// There is no public API, so several FDA-protected locations are probed in
+    /// turn — a real read, not a stat, because TCC denial happens at open time.
+    /// The user-level TCC database alone proved unreliable: it can be missing,
+    /// and it is not the only thing FDA unlocks.
     static var fullDiskAccess: Bool {
-        let tcc = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db")
-        guard let data = try? Data(contentsOf: tcc) else { return false }
-        return !data.isEmpty
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let probes: [URL] = [
+            home.appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db"),
+            home.appendingPathComponent("Library/Safari/Bookmarks.plist"),
+            home.appendingPathComponent("Library/Mail"),
+            URL(fileURLWithPath: "/Library/Application Support/com.apple.TCC/TCC.db")
+        ]
+        for url in probes {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                if let contents = try? FileManager.default.contentsOfDirectory(atPath: url.path),
+                   !contents.isEmpty {
+                    return true
+                }
+                continue
+            }
+            if let data = try? Data(contentsOf: url), !data.isEmpty {
+                return true
+            }
+        }
+        return false
     }
 
     /// Deep link that opens the exact pane for a given permission.

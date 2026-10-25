@@ -103,6 +103,9 @@ final class AppState: ObservableObject {
         }
         selectedIDs = selectedID.map { [$0] } ?? []
         selectionAnchor = selectedID
+        // Opening the panel must also bring the newest card into view: the list
+        // keeps whatever scroll offset it had, which could be pages deep.
+        scrollGeneration &+= 1
     }
     func selectedItem() -> ClipItem? {
         if let selectedID, let item = filteredItems.first(where: { $0.id == selectedID }) { return item }
@@ -226,11 +229,28 @@ final class AppState: ObservableObject {
         PasteService.copy(item, image: store.image(for: item), monitor: monitor, paste: shouldPaste, plainText: plainText)
         statusMessage = shouldPaste ? L("已粘贴", "Pasted") : L("已复制到剪贴板", "Copied to clipboard")
     }
-    /// Pastes the n-th card of the current list, for the ⌘1…⌘9 shortcuts.
+    /// ⌘1…⌘9 map onto the most recent **non-pinned** clips. Pinned cards are
+    /// permanent fixtures at the top of the list; giving them shortcut slots
+    /// would push the clips the user actually copies around.
+    var shortcutAssignments: [UUID: Int] { Self.shortcutAssignments(for: filteredItems) }
+
+    /// Pure so the self-test can exercise it without touching live state.
+    static func shortcutAssignments(for items: [ClipItem]) -> [UUID: Int] {
+        var result: [UUID: Int] = [:]
+        var index = 0
+        for item in items where !item.isPinned {
+            index += 1
+            guard index <= 9 else { break }
+            result[item.id] = index
+        }
+        return result
+    }
+
+    /// Pastes the n-th most recent non-pinned card, for ⌘1…⌘9.
     /// The index follows what the user actually sees, so it also respects the
     /// active tab and the search filter.
     func pasteItem(at index: Int) {
-        let items = filteredItems
+        let items = filteredItems.filter { !$0.isPinned }
         guard index >= 0, index < items.count else { return }
         paste(items[index])
     }

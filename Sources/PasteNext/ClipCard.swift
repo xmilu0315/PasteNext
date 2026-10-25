@@ -120,8 +120,11 @@ struct ClipCard: View, Equatable {
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.displayTitle).font(.system(size: compact ? 11 : 13, weight: .medium)).lineLimit(2)
                 if let path = item.filePaths?.first {
-                    Text(URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent)
-                        .font(.system(size: 9)).foregroundColor(.secondary).lineLimit(1)
+                    // The absolute path, not a second copy of the filename: the
+                    // title already says what the file is called, the path says
+                    // where it lives.
+                    Text(path).font(.system(size: 9)).foregroundColor(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
                 }
             }
         }

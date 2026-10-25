@@ -10,6 +10,10 @@ enum SelfTest {
             asserted += 1
             if !condition { failures.append(name) }
         }
+        // Permission status is environment, not correctness — report, don't assert.
+        print("permissions: accessibility=\(Permissions.accessibility) fullDiskAccess=\(Permissions.fullDiskAccess)")
+        fflush(stdout)
+
         expect(ClipClassifier.classify("https://pastenow.app") == .link, "link classification")
         expect(ClipClassifier.classify("#5F2EEA") == .color, "color classification")
         expect(ClipClassifier.classify("import UIKit\nclass ViewController {\n}") == .code, "code classification")
@@ -440,6 +444,57 @@ enum SelfTest {
             expect(store.items.first?.captionText == "据报道，在首销当天…", "merge keeps the caption")
             expect(store.items.first?.imageSize == "2164×1600", "merge takes the final Retina picture")
             expect(store.items.first?.filePaths?.count == 1, "merge keeps the file path")
+        }
+
+        // ---- UTF-16 little-endian without a BOM (the WeChat mojibake case) --
+        // Genuine UTF-16LE bytes decoded as big-endian produced "⺕㥥饑齓…" in
+        // the history. decodeText must pick the byte order from the payload.
+        do {
+            let board = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.utf16le"))
+            board.clearContents()
+            let item = NSPasteboardItem()
+            var le = Data()
+            for scalar in "iPhone 17 蔚来".unicodeScalars {
+                le.append(UInt8(scalar.value & 0xFF))
+                le.append(UInt8((scalar.value >> 8) & 0xFF))
+            }
+            item.setData(le, forType: .init("public.utf16-external-plain-text"))
+            board.writeObjects([item])
+            let monitor = ClipboardMonitor(pasteboard: board)
+            var captured: ClipItem?
+            monitor.onCapture = { clip, _ in captured = clip }
+            monitor.captureNowForTesting()
+            expect(captured?.text == "iPhone 17 蔚来",
+                   "UTF-16LE without BOM decodes correctly, got: \(captured?.text ?? "nil")")
+        }
+
+        // ---- A file card never absorbs an unrelated image copy --------------
+        do {
+            let scratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("pastenext-selftest-filemerge-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let store = HistoryStore(directory: scratch, load: false)
+            let fileClip = ClipItem(kind: .files, text: "doc.pdf",
+                                    sourceBundleID: "com.apple.finder",
+                                    filePaths: ["/tmp/doc.pdf"])
+            store.mergeOrAdd(fileClip)
+            let imageOnly = ClipItem(kind: .image, text: "",
+                                     sourceBundleID: "com.apple.finder", imageSize: "64×44")
+            store.mergeOrAdd(imageOnly, image: solidImage(.systemTeal, 64, 44))
+            expect(store.items.count == 2, "a file card is complete; an image copy stays separate")
+            expect(store.items.last?.kind == .files, "the file card keeps its kind")
+            expect(store.items.last?.filePaths?.count == 1, "the file card keeps its path")
+        }
+
+        // ---- ⌘1…⌘9 skip pinned cards ---------------------------------------
+        do {
+            let pinned = ClipItem(kind: .text, text: "常驻", isPinned: true)
+            let first = ClipItem(kind: .text, text: "最新")
+            let second = ClipItem(kind: .text, text: "次新")
+            let map = AppState.shortcutAssignments(for: [pinned, first, second])
+            expect(map[pinned.id] == nil, "pinned cards take no shortcut slot")
+            expect(map[first.id] == 1, "the newest non-pinned card is ⌘1")
+            expect(map[second.id] == 2, "the next non-pinned card is ⌘2")
         }
 
         // ---- The paste side ------------------------------------------------
