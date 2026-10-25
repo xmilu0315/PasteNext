@@ -207,7 +207,7 @@ struct ContentView: View {
                 ScrollView {
                     LazyVStack(spacing: 7) {
                         ForEach(Array(state.filteredItems.enumerated()), id: \.element.id) { _, item in
-                            clipRow(item, position: state.shortcutAssignments[item.id] ?? 0)
+                            clipRow(item, position: state.shortcutAssignments[item.id])
                         }
                     }
                     .animation(.spring(response: 0.32, dampingFraction: 0.82), value: state.filteredItems.map(\.id))
@@ -279,9 +279,9 @@ struct ContentView: View {
         }.frame(width: 0, height: 0).opacity(0)
     }
 
-    private func clipRow(_ item: ClipItem, position: Int) -> some View {
+    private func clipRow(_ item: ClipItem, position: Int?) -> some View {
         let card = ClipCard(item: item, selected: state.isSelected(item.id), image: state.store.image(for: item),
-                            compact: true, shortcutIndex: position <= 9 ? position : nil)
+                            compact: true, shortcutIndex: position)
             .equatable()
             .id(item.id)
         return card

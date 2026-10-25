@@ -7,6 +7,9 @@ final class ClipboardMonitor: ObservableObject {
     @Published var isPaused = false
     var onCapture: ((ClipItem, NSImage?) -> Void)?
     var onSound: (() -> Void)?
+    /// Delivered when a remote `<img>` finishes downloading after the clip was
+    /// already captured. The card is updated in place.
+    var onRemoteImage: ((UUID, NSImage) -> Void)?
     @Published var ignoredBundleIDs: Set<String> = ["com.agilebits.onepassword", "com.1password.1password", "net.antelle.keeweb"]
     private let pasteboard: NSPasteboard
     private var timer: Timer?
@@ -181,6 +184,27 @@ final class ClipboardMonitor: ObservableObject {
             imageSize: image.map { "\(Int($0.size.width))×\(Int($0.size.height))" }
         )
         onSound?()
+        // Browser image+text copies carry only an <img> URL — no image data.
+        // Fetch it in the background (never on the main thread) and update the
+        // card in place when it lands.
+        if image == nil, item.kind != .files,
+           UserDefaults.standard.object(forKey: "fetchRemoteImages") as? Bool ?? true {
+            let candidates = remoteImageURLs(types: types)
+            if !candidates.isEmpty {
+                let capturedID = item.id
+                DispatchQueue.global(qos: .utility).async { [weak self] in
+                    for url in candidates.prefix(2) {
+                        if let fetched = Self.fetchImageSync(url) {
+                            Diagnostics.log("image.fetch", ["url": String(url.absoluteString.prefix(120))])
+                            DispatchQueue.main.async { [weak self] in
+                                self?.onRemoteImage?(capturedID, fetched)
+                            }
+                            break
+                        }
+                    }
+                }
+            }
+        }
         Diagnostics.log("capture.done", [
             "kind": kind.rawValue,
             "hasText": String(item.captionText != nil),
@@ -444,11 +468,21 @@ final class ClipboardMonitor: ObservableObject {
         guard let data = pasteboard.data(forType: .init("public.html")),
               let html = String(data: data, encoding: .utf8) else { return nil }
         let pattern = "<img[^>]+src\\s*=\\s*[\"']([^\"']+)[\"']"
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
-              let match = regex.firstMatch(in: html, options: [],
-                                           range: NSRange(html.startIndex..., in: html)),
-              let srcRange = Range(match.range(at: 1), in: html) else { return nil }
-        let src = String(html[srcRange])
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return nil }
+        let matches = regex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
+        guard !matches.isEmpty else { return nil }
+        // Try every image in document order (bounded): the first one can be a
+        // tracking pixel that decodes to a useless 1×1.
+        for match in matches.prefix(4) {
+            guard let srcRange = Range(match.range(at: 1), in: html) else { continue }
+            let src = String(html[srcRange])
+            if let image = loadImage(fromHTMLSource: src) { return image }
+        }
+        return nil
+    }
+
+    /// Resolves one `<img src>` value to an image.
+    private func loadImage(fromHTMLSource src: String) -> NSImage? {
 
         // A base64 data: URI carries the picture inline — no file, no network.
         if src.hasPrefix("data:") {
@@ -463,8 +497,7 @@ final class ClipboardMonitor: ObservableObject {
             return NSImage(contentsOf: url)
         }
         // A relative path is resolved against the page the copy came from, when
-        // that page is itself local. Remote pages would need a network fetch,
-        // which this app deliberately never does.
+        // that page is itself local.
         if !src.contains("://"), src.hasPrefix("/") == false {
             if let pageURL = pasteboard.string(forType: .init("org.chromium.source-url")),
                let base = URL(string: pageURL), base.scheme == "file",
@@ -473,6 +506,55 @@ final class ClipboardMonitor: ObservableObject {
             }
         }
         return nil
+    }
+
+    /// Remote `<img>` URLs from the HTML, in document order.
+    private func remoteImageURLs(types: [NSPasteboard.PasteboardType]) -> [URL] {
+        for type in [NSPasteboard.PasteboardType("public.html"),
+                     NSPasteboard.PasteboardType("Apple HTML pasteboard type")] {
+            guard let data = pasteboard.data(forType: type),
+                  let html = String(data: data, encoding: .utf8) else { continue }
+            let pattern = "<img[^>]+src\\s*=\\s*[\"']([^\"']+)[\"']"
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
+            let matches = regex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
+            var urls: [URL] = []
+            for match in matches.prefix(6) {
+                guard let range = Range(match.range(at: 1), in: html) else { continue }
+                let src = String(html[range])
+                if src.hasPrefix("http://") || src.hasPrefix("https://"), let url = URL(string: src) {
+                    urls.append(url)
+                }
+            }
+            if !urls.isEmpty { return urls }
+        }
+        return []
+    }
+
+    /// Blocking fetch, safe to call off the main thread. Loopback URLs bypass
+    /// the system proxy, which on some setups intercepts even localhost.
+    static func fetchImageSync(_ url: URL) -> NSImage? {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: NSImage?
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        let config = URLSessionConfiguration.default
+        if let host = url.host, host == "127.0.0.1" || host == "localhost" {
+            config.connectionProxyDictionary = [:]
+        }
+        let session = URLSession(configuration: config)
+        let task = session.dataTask(with: request) { data, response, _ in
+            defer {
+                semaphore.signal()
+                session.finishTasksAndInvalidate()
+            }
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                  let data, data.count <= 24_000_000, data.count > 64,
+                  let image = NSImage(data: data) else { return }
+            result = image
+        }
+        task.resume()
+        _ = semaphore.wait(timeout: .now() + 10)
+        return result
     }
 
     private func newestPixPinTemporaryImage() -> URL? {

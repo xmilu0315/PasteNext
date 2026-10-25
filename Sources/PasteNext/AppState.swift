@@ -72,6 +72,14 @@ final class AppState: ObservableObject {
         monitor.onSound = {
             CaptureSound.playSelected()
         }
+        monitor.onRemoteImage = { [weak self] id, image in
+            Task { @MainActor in
+                guard let self else { return }
+                self.store.attachImage(id: id, image: image)
+                self.captureCount += 1
+                NotificationCenter.default.post(name: .pasteNextDidCapture, object: nil)
+            }
+        }
         monitorObserver = monitor.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         monitor.start()
     }

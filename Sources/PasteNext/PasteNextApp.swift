@@ -102,6 +102,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        // Prints what the current general pasteboard would be captured as.
+        // The fastest way to answer "why did this copy look wrong?".
+        if CommandLine.arguments.contains("--capture-check") {
+            func log(_ s: String) { print(s); fflush(stdout) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                let monitor = ClipboardMonitor()
+                var result: (ClipItem, NSImage?)? = nil
+                monitor.onCapture = { item, image in result = (item, image) }
+                monitor.captureNowForTesting()
+                if let (item, image) = result {
+                    log("kind        : \(item.kind.rawValue)")
+                    log("text        : '\(item.text.prefix(80))'")
+                    log("captionText : \(item.captionText?.prefix(80) ?? "nil")")
+                    log("imageSize   : \(item.imageSize ?? "nil")")
+                    log("imageLoaded : \(image != nil)")
+                } else {
+                    log("*** NOTHING CAPTURED ***")
+                }
+                NSApp.terminate(nil)
+            }
+        }
         if CommandLine.arguments.contains("--show-panel") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { PanelController.shared.show() }
         }

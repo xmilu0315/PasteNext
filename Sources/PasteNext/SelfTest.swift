@@ -497,6 +497,56 @@ enum SelfTest {
             expect(map[second.id] == 2, "the next non-pinned card is ⌘2")
         }
 
+        // ---- Remote image fetch (browser image+text selections) -------------
+        // Chromium puts only text/html with a remote <img> on the board — no
+        // image data. The fetch path is what makes those copies complete.
+        // 127.0.0.1 keeps the test self-contained; skipped if the helper server
+        // is not running.
+        do {
+            let server = URL(string: "http://127.0.0.1:8765/pic.png")!
+            var reachable = false
+            let sem = DispatchSemaphore(value: 0)
+            var probe = URLRequest(url: server)
+            probe.timeoutInterval = 1.5
+            // Bypass the system proxy: the loopback helper must be reached
+            // directly even on machines whose proxy intercepts localhost.
+            let config = URLSessionConfiguration.default
+            config.connectionProxyDictionary = [:]
+            URLSession(configuration: config).dataTask(with: probe) { d, r, _ in
+                reachable = (r as? HTTPURLResponse)?.statusCode == 200 && (d?.count ?? 0) > 64
+                sem.signal()
+            }.resume()
+            sem.wait()
+
+            if reachable {
+                let board = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.remoteimg"))
+                board.clearContents()
+                let item = NSPasteboardItem()
+                item.setString("<html><body><p>浏览器图文的文字</p><img src=\"http://127.0.0.1:8765/pic.png\"></body></html>",
+                               forType: .init("public.html"))
+                item.setString("浏览器图文的文字", forType: .string)
+                board.writeObjects([item])
+                let monitor = ClipboardMonitor(pasteboard: board)
+                var captured: ClipItem?
+                monitor.onCapture = { clip, _ in captured = clip }
+                // The fetch is asynchronous by design (never on the capture path):
+                // the card is created text-only, then the picture lands via
+                // onRemoteImage and the card updates in place.
+                var remoteImage: NSImage?
+                monitor.onRemoteImage = { _, image in remoteImage = image }
+                monitor.captureNowForTesting()
+                expect(captured?.captionText == "浏览器图文的文字", "remote-image copy keeps its text")
+                expect(captured?.kind == .text, "remote-image copy is captured immediately as text")
+                // The delivery hops to the main queue, so the wait must run the
+                // run loop instead of blocking it.
+                let deadline = Date().addingTimeInterval(12)
+                while remoteImage == nil && Date() < deadline {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                }
+                expect(remoteImage != nil, "remote image is fetched in the background and delivered")
+            }
+        }
+
         // ---- The paste side ------------------------------------------------
         // An image+text clip must put BOTH on the board, so a rich-text target
         // (a WeChat input box, for instance) receives the picture and the words.

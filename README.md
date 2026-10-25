@@ -282,7 +282,8 @@ PasteNext 是一款常驻菜单栏的 macOS 剪贴板历史工具。它轻量轮
 
 - 密码管理器标记的敏感内容（`ConcealedType`）永不捕获。
 - 1Password 与 KeeWeb 默认排除；用户可在设置中**拖拽 `.app` 文件**或点击选择本机应用来追加排除项，无需手填 Bundle ID。
-- 全部历史仅保存在本机，**不联网、不上传、无任何后台网络请求**（提取远程图片的尝试被刻意省略，就是为了守住这条）。
+- 全部历史仅保存在本机，**不上传、无任何遥测**。
+- 唯一的网络行为：当你在浏览器复制「图文」时，剪贴板里只有图片的网址，PasteNext 会在你复制的瞬间获取那张图片本身（**设置 → 隐私与规则** 可关闭）。关闭后浏览器图文仍可记录文字，只是没有图片。
 - 接力内容默认正常记录并标注 iPhone 来源。
 
 ### 诊断日志
@@ -294,6 +295,8 @@ PasteNext 是一款常驻菜单栏的 macOS 剪贴板历史工具。它轻量轮
 ```
 
 每行一个事件，形如 `capture.done kind=image hasText=true hasImage=true imageFrom=webarchive imageSize=800×600`。排障时先看这个文件，比复述现象高效得多。
+
+自检运行时还会打印权限状态：`permissions: accessibility=true fullDiskAccess=false` —— 权限问题一眼可见。
 
 ### 国际化
 

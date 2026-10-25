@@ -130,7 +130,17 @@ struct SettingsView: View {
     private var rules: some View {
         Form {
             Section {
-                Text(L("始终跳过密码管理器标记的敏感内容、临时内容与自动生成内容。所有历史仅保存在本机，不联网、不上传。", "Sensitive, transient and auto-generated clips marked by source apps are always skipped. History stays on this Mac; no network upload."))
+                Toggle(isOn: Binding(
+                    get: { UserDefaults.standard.object(forKey: "fetchRemoteImages") as? Bool ?? true },
+                    set: { UserDefaults.standard.set($0, forKey: "fetchRemoteImages") }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L("复制网页图文时获取图片", "Fetch images when copying web image+text"))
+                        Text(L("浏览器把网页图文放入剪贴板时只携带图片的网址。开启后，PasteNext 会在你复制的瞬间获取那张图片（仅此一处网络请求）。", "Browsers put only the image URL on the board for web image+text copies. When on, PasteNext fetches that picture at the moment you copy — the app's only network traffic."))
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                }
+                Text(L("始终跳过密码管理器标记的敏感内容、临时内容与自动生成内容。所有历史仅保存在本机，不上传。", "Sensitive, transient and auto-generated clips marked by source apps are always skipped. History stays on this Mac; no upload."))
                     .font(.callout).fixedSize(horizontal: false, vertical: true)
                 excludedAppsEditor
                 Text(L("默认排除 1Password 与 KeeWeb。接力内容默认正常记录并标注 iPhone 来源。", "1Password and KeeWeb are excluded by default. Universal Clipboard is recorded and marked with an iPhone icon."))

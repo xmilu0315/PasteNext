@@ -128,6 +128,22 @@ final class HistoryStore: ObservableObject {
         scheduleSave()
     }
 
+    /// Attaches a late-arriving remote image to an existing clip.
+    ///
+    /// Browser image+text copies carry only an `<img>` URL, so the card is
+    /// created first and the picture lands a moment later.
+    func attachImage(id: UUID, image: NSImage) {
+        guard let index = items.firstIndex(where: { $0.id == id }),
+              items[index].imageFilename == nil else { return }
+        items[index].imageFilename = saveImage(image, id: id)
+        items[index].imageSize = "\(Int(image.size.width))×\(Int(image.size.height))"
+        if items[index].kind == .text, items[index].captionText != nil {
+            items[index].kind = .image
+        }
+        objectWillChange.send()
+        scheduleSave()
+    }
+
     func update(_ item: ClipItem) {
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
         items[index] = item
