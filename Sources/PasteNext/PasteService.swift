@@ -4,6 +4,11 @@ import Foundation
 
 @MainActor
 enum PasteService {
+    /// Status messages are pushed through this closure instead of reaching for
+    /// `AppState.shared`: touching the singleton would instantiate the real
+    /// history store inside any debug/secondary process and let it overwrite
+    /// the user's history.
+    static var statusSink: ((String) -> Void)?
     static func copy(_ item: ClipItem, image: NSImage?, monitor: ClipboardMonitor, paste: Bool, plainText: Bool = false,
                      pasteboard: NSPasteboard = .general) {
         let pb = pasteboard
@@ -79,7 +84,7 @@ enum PasteService {
         // happened" — so say so instead of failing silently.
         guard Permissions.accessibility else {
             Diagnostics.log("paste.blocked", ["reason": "accessibility-not-granted"])
-            AppState.shared.statusMessage = L("需要辅助功能权限才能自动粘贴", "Accessibility permission required to auto-paste")
+            PasteService.statusSink?(L("需要辅助功能权限才能自动粘贴", "Accessibility permission required to auto-paste"))
             promptAccessibility()
             return
         }

@@ -72,6 +72,9 @@ final class AppState: ObservableObject {
         monitor.onSound = {
             CaptureSound.playSelected()
         }
+        PasteService.statusSink = { [weak self] message in
+            Task { @MainActor in self?.statusMessage = message }
+        }
         monitor.onRemoteImage = { [weak self] id, image in
             Task { @MainActor in
                 guard let self else { return }

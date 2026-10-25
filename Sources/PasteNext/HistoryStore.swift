@@ -228,6 +228,20 @@ final class HistoryStore: ObservableObject {
         let url = historyURL
         let work = DispatchWorkItem {
             guard let data = try? JSONEncoder.pasteNext.encode(snapshot) else { return }
+            // Refuse to shrink the file drastically in one write. A store that
+            // failed to load (corrupt read, a second process with a partial
+            // view) would otherwise stamp its near-empty state over a healthy
+            // history — that is exactly how 79 clips were lost once.
+            if let onDisk = try? Data(contentsOf: url),
+               let existing = try? JSONDecoder.pasteNext.decode([ClipItem].self, from: onDisk),
+               existing.count >= 5,
+               snapshot.count * 2 < existing.count {
+                Diagnostics.log("store.save.blocked", [
+                    "memory": String(snapshot.count),
+                    "onDisk": String(existing.count)
+                ])
+                return
+            }
             try? data.write(to: url, options: .atomic)
         }
         saveWork = work

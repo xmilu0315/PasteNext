@@ -14,7 +14,7 @@ struct AboutSnapshotView: View {
                 .resizable().aspectRatio(contentMode: .fit).frame(width: 76, height: 76)
                 .shadow(color: .black.opacity(0.16), radius: 8, y: 4)
             Text("PasteNext").font(.system(size: 30, weight: .bold, design: .rounded))
-            Text(L("版本 1.3.6 · 原生 macOS 剪贴板历史", "Version 1.3.6 · Native macOS clipboard history"))
+            Text(L("版本 \(AppInfo.version) · 原生 macOS 剪贴板历史", "Version \(AppInfo.version) · Native macOS clipboard history"))
                 .foregroundColor(.secondary)
             Divider().padding(.horizontal, 70)
             Text(L("轻量轮询 changeCount，仅在变化时读取内容。\n支持 macOS 通用剪贴板（接力），本地存储，无后台网络请求。",

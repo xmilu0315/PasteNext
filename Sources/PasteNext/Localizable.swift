@@ -18,3 +18,10 @@ enum Language: String, CaseIterable, Identifiable {
 func L(_ chinese: String, _ english: String) -> String {
     Language.isChinese ? chinese : english
 }
+
+/// Bundle metadata, so the UI never carries a hard-coded version again.
+enum AppInfo {
+    static var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+    }
+}

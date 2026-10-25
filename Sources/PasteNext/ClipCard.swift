@@ -73,16 +73,16 @@ struct ClipCard: View, Equatable {
             case .files:
                 filesRow
             case .image:
-                // The picture could not be read back; fall back to the text that
-                // came with it, and only then to a placeholder.
-                if image == nil {
-                    if let caption = item.captionText {
-                        Text(caption).font(.system(size: compact ? 11 : 13))
-                            .lineLimit(compact ? 2 : 4).truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        Label(L("图片不可用", "Image unavailable"), systemImage: "photo")
-                    }
+                // The caption always renders under the picture — an image+text
+                // copy must show both. Only when the picture itself is missing
+                // does the card fall back to the placeholder.
+                if let caption = item.captionText {
+                    Text(caption).font(.system(size: compact ? 10 : 12))
+                        .foregroundColor(.secondary)
+                        .lineLimit(compact ? 2 : 4).truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if image == nil {
+                    Label(L("图片不可用", "Image unavailable"), systemImage: "photo")
                 }
             case .text, .link, .code:
                 if let caption = item.captionText {

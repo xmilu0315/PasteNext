@@ -11,7 +11,7 @@ enum SelfTest {
             if !condition { failures.append(name) }
         }
         // Permission status is environment, not correctness — report, don't assert.
-        print("permissions: accessibility=\(Permissions.accessibility) fullDiskAccess=\(Permissions.fullDiskAccess)")
+        print("version: \(AppInfo.version)  permissions: accessibility=\(Permissions.accessibility) fullDiskAccess=\(Permissions.fullDiskAccess)")
         fflush(stdout)
 
         expect(ClipClassifier.classify("https://pastenow.app") == .link, "link classification")

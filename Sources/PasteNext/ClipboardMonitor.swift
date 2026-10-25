@@ -190,17 +190,29 @@ final class ClipboardMonitor: ObservableObject {
         if image == nil, item.kind != .files,
            UserDefaults.standard.object(forKey: "fetchRemoteImages") as? Bool ?? true {
             let candidates = remoteImageURLs(types: types)
+            if candidates.isEmpty {
+                // Useful signal: the copy is text-only and the HTML carries no
+                // reachable image URL (or no HTML at all).
+                let hasHTML = types.contains(.init("public.html"))
+                Diagnostics.log("image.fetch.none", ["hasHTML": String(hasHTML),
+                                                     "types": types.prefix(6).map(\.rawValue).joined(separator: ",")])
+            }
             if !candidates.isEmpty {
                 let capturedID = item.id
+                Diagnostics.log("image.fetch.try", [
+                    "count": String(candidates.count),
+                    "first": String(candidates[0].absoluteString.prefix(140))
+                ])
                 DispatchQueue.global(qos: .utility).async { [weak self] in
-                    for url in candidates.prefix(2) {
+                    for url in candidates.prefix(3) {
                         if let fetched = Self.fetchImageSync(url) {
-                            Diagnostics.log("image.fetch", ["url": String(url.absoluteString.prefix(120))])
+                            Diagnostics.log("image.fetch", ["url": String(url.absoluteString.prefix(140))])
                             DispatchQueue.main.async { [weak self] in
                                 self?.onRemoteImage?(capturedID, fetched)
                             }
-                            break
+                            return
                         }
+                        Diagnostics.log("image.fetch.fail", ["url": String(url.absoluteString.prefix(140))])
                     }
                 }
             }
@@ -508,20 +520,34 @@ final class ClipboardMonitor: ObservableObject {
         return nil
     }
 
-    /// Remote `<img>` URLs from the HTML, in document order.
+    /// Remote image URLs from the HTML payload, in document order.
+    ///
+    /// Browsers do not agree on how the picture is referenced — plain `src`,
+    /// lazy-loaded `data-src`, `srcset` descriptors, or a CSS background — so
+    /// every common form is collected.
     private func remoteImageURLs(types: [NSPasteboard.PasteboardType]) -> [URL] {
+        let patterns = [
+            "<img[^>]+\\ssrc\\s*=\\s*[\"']([^\"']+)[\"']",
+            "<img[^>]+data-src\\s*=\\s*[\"']([^\"']+)[\"']",
+            "<img[^>]+srcset\\s*=\\s*[\"']([^\"'\\s,]+)",
+            "background-image\\s*:\\s*url\\(\\s*[\"']?([^\"')]+)"
+        ]
         for type in [NSPasteboard.PasteboardType("public.html"),
                      NSPasteboard.PasteboardType("Apple HTML pasteboard type")] {
             guard let data = pasteboard.data(forType: type),
                   let html = String(data: data, encoding: .utf8) else { continue }
-            let pattern = "<img[^>]+src\\s*=\\s*[\"']([^\"']+)[\"']"
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
-            let matches = regex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
             var urls: [URL] = []
-            for match in matches.prefix(6) {
-                guard let range = Range(match.range(at: 1), in: html) else { continue }
-                let src = String(html[range])
-                if src.hasPrefix("http://") || src.hasPrefix("https://"), let url = URL(string: src) {
+            var seen = Set<String>()
+            for pattern in patterns {
+                guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
+                let matches = regex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
+                for match in matches.prefix(6) {
+                    guard match.numberOfRanges > 1,
+                          let range = Range(match.range(at: 1), in: html) else { continue }
+                    let src = String(html[range])
+                    guard src.hasPrefix("http://") || src.hasPrefix("https://"),
+                          seen.insert(src).inserted,
+                          let url = URL(string: src) else { continue }
                     urls.append(url)
                 }
             }
