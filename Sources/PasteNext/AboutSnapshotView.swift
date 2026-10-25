@@ -1,3 +1,4 @@
+#if DEBUG
 import AppKit
 import SwiftUI
 
@@ -81,3 +82,4 @@ struct DonationQRPreview: View {
         }
     }
 }
+#endif

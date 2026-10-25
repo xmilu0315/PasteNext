@@ -72,7 +72,10 @@ final class ClipboardMonitor: ObservableObject {
     func captureNowForTesting() { capture() }
 
     private func capture() {
-        guard let types = pasteboard.types, !concealedTypes.contains(where: types.contains) else { return }
+        guard let types = pasteboard.types, !concealedTypes.contains(where: types.contains) else {
+            Diagnostics.log("capture.skipped", ["reason": "concealed"])
+            return
+        }
         let ignoreTransient = UserDefaults.standard.bool(forKey: "ignoreTransientItems")
         if ignoreTransient && transientTypes.contains(where: types.contains) { return }
         let isRemote = types.contains(.init("com.apple.is-remote-clipboard"))
@@ -95,19 +98,30 @@ final class ClipboardMonitor: ObservableObject {
         let declaresImage = filesAreImages && (imageTypes.contains(where: types.contains)
             || pasteboard.canReadItem(withDataConformingToTypes: [UTType.image.identifier]))
         var image = declaresImage ? NSImage(pasteboard: pasteboard) : nil
+        var imageSource = "none"
+        if image != nil { imageSource = "flavour" }
         if image == nil && declaresImage {
             for type in imageTypes {
-                if let data = pasteboard.data(forType: type), let fallback = NSImage(data: data) { image = fallback; break }
+                if let data = pasteboard.data(forType: type), let fallback = NSImage(data: data) {
+                    image = fallback; imageSource = "flavour-\(type.rawValue)"; break
+                }
             }
         }
         // Some screenshot tools put only a temporary PNG file URL on the pasteboard.
         if image == nil, filesAreImages, let url = fileURLs.first(where: isReadableImageFile) {
             image = loadImage(at: url)
+            if image != nil { imageSource = "fileurl" }
         }
         // PixPin's Qt pasteboard may expose the image only through a private MIME blob.
-        if image == nil {
-            image = scanPasteboardForEmbeddedImage(types: types)
+        if image == nil, let found = scanPasteboardForEmbeddedImage(types: types) {
+            image = found; imageSource = "scan"
         }
+        // Browsers put no standalone image flavour on the board: the picture
+        // lives in the RTF payload (as a hex blob), in the web archive, or in
+        // the HTML as a file:// / data: / relative URL. Try all of them.
+        if image == nil, let found = imageFromRTF() { image = found; imageSource = "rtf" }
+        if image == nil, let found = imageFromWebArchive() { image = found; imageSource = "webarchive" }
+        if image == nil, let found = imageFromHTML() { image = found; imageSource = "html" }
         // Last resort for PixPin's "copy image as file": use the just-created Temp image.
         let isPixPin = types.contains(.init("com.trolltech.anymime.PixPinData"))
             || app?.bundleIdentifier == "com.depthpicture.PixPin"
@@ -140,16 +154,16 @@ final class ClipboardMonitor: ObservableObject {
         } else {
             kind = ClipClassifier.classify(text, hasImage: false, hasFiles: false)
         }
-        let imageDescription = image.map { "\(L("截图", "Screenshot")) · \(Int($0.size.width))×\(Int($0.size.height))" } ?? L("图片", "Image")
+        // `text` is always the real text, never a generated stand-in. A copy can
+        // carry a picture, text and files at once and all of it has to survive;
+        // a picture-only clip simply has no text and is described by imageSize.
         let contentText: String
         if kind == .files {
             contentText = fileURLs.map(\.lastPathComponent).joined(separator: "\n")
-        } else if kind == .image {
-            contentText = imageDescription
         } else if !text.isEmpty {
             contentText = text
         } else {
-            contentText = fileURLs.map(\.lastPathComponent).joined(separator: "\n")
+            contentText = ""
         }
         let item = ClipItem(
             kind: kind,
@@ -158,9 +172,21 @@ final class ClipboardMonitor: ObservableObject {
             sourceName: isRemote ? L("接力剪贴板", "Universal Clipboard") : app?.localizedName,
             sourcePath: app?.bundleURL?.path,
             isRemote: isRemote,
-            filePaths: fileURLs.isEmpty ? nil : fileURLs.map(\.path)
+            filePaths: fileURLs.isEmpty ? nil : fileURLs.map(\.path),
+            imageSize: image.map { "\(Int($0.size.width))×\(Int($0.size.height))" }
         )
         onSound?()
+        Diagnostics.log("capture.done", [
+            "kind": kind.rawValue,
+            "hasText": String(item.captionText != nil),
+            "hasImage": String(image != nil),
+            "imageFrom": imageSource,
+            "fileCount": String(fileURLs.count),
+            "imageSize": item.imageSize ?? "-"
+        ])
+        // Hand over the picture whenever there is one. Finder puts an icon
+        // preview on the board for a file copy, and that is not the content,
+        // so plain file clips still pass nil.
         onCapture?(item, kind == .files ? nil : image)
     }
 
@@ -276,6 +302,106 @@ final class ClipboardMonitor: ObservableObject {
         return nil
     }
 
+    /// Pulls an embedded image out of an RTF payload.
+    ///
+    /// Word, TextEdit and several note apps put the picture on the board as a
+    /// hex blob inside the RTF (`{\*\shppict{\pict\pngblip <hex>}}`) with no
+    /// separate image flavour, so without this an image+text copy came through
+    /// as text only.
+    private func imageFromRTF() -> NSImage? {
+        for type in [NSPasteboard.PasteboardType("public.rtf"),
+                     NSPasteboard.PasteboardType("NeXT Rich Text Format v1.0 pasteboard type"),
+                     NSPasteboard.PasteboardType("com.apple.flat-rtfd"),
+                     NSPasteboard.PasteboardType("NeXT RTFD pasteboard type")] {
+            guard let data = pasteboard.data(forType: type), !data.isEmpty else { continue }
+            // The hex blob is ASCII inside an otherwise binary container, so a
+            // lossy decode still exposes the hex digits we need.
+            guard let raw = String(data: data, encoding: .windowsCP1252) ?? String(data: data, encoding: .ascii) else { continue }
+            let markers = ["pngblip", "jpegblip", "blip"]
+            for marker in markers {
+                if let range = raw.range(of: marker) {
+                    // Skip past the marker and any whitespace / control words.
+                    var index = raw.index(range.upperBound, offsetBy: 0)
+                    while index < raw.endIndex, raw[index].isWhitespace || raw[index] == "\r" || raw[index] == "\n" {
+                        index = raw.index(after: index)
+                    }
+                    var hex = ""
+                    while index < raw.endIndex, "0123456789abcdefABCDEF".contains(raw[index]) {
+                        hex.append(raw[index])
+                        index = raw.index(after: index)
+                    }
+                    if hex.count > 64, let bytes = Data(hexString: hex), let image = NSImage(data: bytes) {
+                        return image
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Pulls an image out of a Safari/WebKit web archive.
+    ///
+    /// `com.apple.webarchive` is a property list whose subresources carry the
+    /// picture as base64 in `WebResourceData`.
+    private func imageFromWebArchive() -> NSImage? {
+        for type in [NSPasteboard.PasteboardType("com.apple.webarchive"),
+                     NSPasteboard.PasteboardType("Apple Web Archive pasteboard type")] {
+            guard let data = pasteboard.data(forType: type),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+                  let root = plist as? [String: Any] else { continue }
+            let subresources = (root["WebSubresources"] as? [[String: Any]]) ?? []
+            for resource in subresources {
+                guard let mime = resource["WebResourceMIMEType"] as? String,
+                      mime.hasPrefix("image/"),
+                      let payload = resource["WebResourceData"] as? Data,
+                      let image = NSImage(data: payload) else { continue }
+                return image
+            }
+        }
+        return nil
+    }
+
+    /// Pulls an image out of an HTML payload.
+    ///
+    /// Copying a selection from a browser usually puts `public.html` on the board
+    /// with the picture referenced by a local `file://` URL, plus the plain text.
+    /// `scanPasteboardForEmbeddedImage` deliberately skips HTML (it is text), so
+    /// without this the clip arrived as text only.
+    private func imageFromHTML() -> NSImage? {
+        guard let data = pasteboard.data(forType: .init("public.html")),
+              let html = String(data: data, encoding: .utf8) else { return nil }
+        let pattern = "<img[^>]+src\\s*=\\s*[\"']([^\"']+)[\"']"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+              let match = regex.firstMatch(in: html, options: [],
+                                           range: NSRange(html.startIndex..., in: html)),
+              let srcRange = Range(match.range(at: 1), in: html) else { return nil }
+        let src = String(html[srcRange])
+
+        // A base64 data: URI carries the picture inline — no file, no network.
+        if src.hasPrefix("data:") {
+            let comma = src.firstIndex(of: ",") ?? src.endIndex
+            let meta = src[src.startIndex..<comma]
+            let payload = src[src.index(after: comma)...]
+            guard meta.contains("base64"), let bytes = Data(base64Encoded: String(payload)) else { return nil }
+            return NSImage(data: bytes)
+        }
+        // A local file URL is readable directly.
+        if src.hasPrefix("file://"), let url = URL(string: src) {
+            return NSImage(contentsOf: url)
+        }
+        // A relative path is resolved against the page the copy came from, when
+        // that page is itself local. Remote pages would need a network fetch,
+        // which this app deliberately never does.
+        if !src.contains("://"), src.hasPrefix("/") == false {
+            if let pageURL = pasteboard.string(forType: .init("org.chromium.source-url")),
+               let base = URL(string: pageURL), base.scheme == "file",
+               let resolved = URL(string: src, relativeTo: base)?.absoluteURL {
+                return NSImage(contentsOf: resolved)
+            }
+        }
+        return nil
+    }
+
     private func newestPixPinTemporaryImage() -> URL? {
         let directory = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Application Support/PixPin/Temp", isDirectory: true)
@@ -297,5 +423,23 @@ final class ClipboardMonitor: ObservableObject {
             let r = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             return l < r
         }
+    }
+}
+
+extension Data {
+    /// Builds `Data` from a hex string, ignoring anything that is not a hex digit.
+    init?(hexString: String) {
+        let digits = hexString.filter { "0123456789abcdefABCDEF".contains($0) }
+        guard digits.count % 2 == 0, !digits.isEmpty else { return nil }
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(digits.count / 2)
+        var index = digits.startIndex
+        while index < digits.endIndex {
+            let next = digits.index(after: index)
+            guard let byte = UInt8(digits[index...next], radix: 16) else { return nil }
+            bytes.append(byte)
+            index = digits.index(after: next)
+        }
+        self = Data(bytes)
     }
 }

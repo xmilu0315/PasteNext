@@ -12,7 +12,15 @@ enum SelfTest {
         expect(ClipClassifier.classify("#5F2EEA") == .color, "color classification")
         expect(ClipClassifier.classify("import UIKit\nclass ViewController {\n}") == .code, "code classification")
         expect(ClipClassifier.classify("Hello, this is a simple text message.") == .text, "text classification")
-        expect(Palette.color(for: "same") == Palette.color(for: "same"), "stable palette")
+        expect(Palette.color(for: .text) == Palette.color(for: .text), "stable palette")
+        // Every content kind must be visually distinct, otherwise the tint is
+        // just decoration.
+        let kinds = ClipKind.allCases
+        for i in kinds.indices {
+            for j in kinds.indices where i != j {
+                expect(Palette.isDistinct(kinds[i], kinds[j]), "distinct tint for \(kinds[i].rawValue) vs \(kinds[j].rawValue)")
+            }
+        }
         var pinned = ClipItem(kind: .text, text: "hello")
         pinned.isPinned = true
         expect(ClipCategory.pinned.contains(pinned), "pinned filter")
@@ -142,12 +150,244 @@ enum SelfTest {
         expect(provider.registeredTypeIdentifiers.contains(PasteDragType.card), "internal card drag type")
         expect(provider.registeredTypeIdentifiers.contains("public.png"), "external image drag type")
 
-        // The donation QR codes must be present in the app bundle.
-        expect(NSImage(named: "donate-wechat") != nil, "donation WeChat QR bundled")
-        expect(NSImage(named: "donate-alipay") != nil, "donation Alipay QR bundled")
+        // End-to-end: an image+text copy (what a browser selection or a WeChat
+        // draft produces) must come back as one clip holding BOTH.
+        do {
+            let board = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.imagetext"))
+            board.clearContents()
+            let img = NSImage(size: NSSize(width: 40, height: 24))
+            img.lockFocus()
+            NSColor.systemTeal.setFill()
+            NSRect(x: 0, y: 0, width: 40, height: 24).fill()
+            img.unlockFocus()
+            let item = NSPasteboardItem()
+            if let tiff = img.tiffRepresentation { item.setData(tiff, forType: .tiff) }
+            item.setString("60度的蔚来萤火虫电池！值不值？", forType: .string)
+            board.writeObjects([item])
+            let monitor = ClipboardMonitor(pasteboard: board)
+            var captured: ClipItem?
+            monitor.onCapture = { clip, image in captured = clip; _ = image }
+            monitor.captureNowForTesting()
+            expect(captured?.kind == .image, "image+text copy is an image clip")
+            expect(captured?.captionText == "60度的蔚来萤火虫电池！值不值？",
+                   "image+text copy keeps its text as a caption")
+            expect(captured?.text == "60度的蔚来萤火虫电池！值不值？",
+                   "image+text copy stores the real text, not a description")
+        }
+
+        // An HTML-only payload with a local <img> must still yield the picture.
+        do {
+            let pngURL = FileManager.default.temporaryDirectory.appendingPathComponent("selftest-html-img-\(UUID().uuidString).png")
+            let img = NSImage(size: NSSize(width: 30, height: 20))
+            img.lockFocus()
+            NSColor.systemBlue.setFill()
+            NSRect(x: 0, y: 0, width: 30, height: 20).fill()
+            img.unlockFocus()
+            if let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+               let png = rep.representation(using: .png, properties: [:]) {
+                try? png.write(to: pngURL)
+            }
+            let html = "<html><body><p>captioned text</p><img src=\"\(pngURL.absoluteString)\"></body></html>"
+            let board = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.htmlimg"))
+            board.clearContents()
+            let pi = NSPasteboardItem()
+            pi.setString(html, forType: .init("public.html"))
+            pi.setString("captioned text", forType: .string)
+            board.writeObjects([pi])
+            let monitor = ClipboardMonitor(pasteboard: board)
+            var captured: ClipItem?
+            monitor.onCapture = { clip, _ in captured = clip }
+            monitor.captureNowForTesting()
+            expect(captured?.kind == .image, "HTML-embedded image is detected")
+            expect(captured?.captionText == "captioned text", "HTML clip keeps its text")
+            try? FileManager.default.removeItem(at: pngURL)
+        }
+
+        // A picture copied together with text must keep the text, and the
+        // generated "Screenshot · WxH" description must never be mistaken
+        // for a caption.
+        let mixed = ClipItem(kind: .image, text: "60度的蔚来萤火虫电池！值不值？")
+        expect(mixed.captionText == "60度的蔚来萤火虫电池！值不值？", "image clip keeps its caption")
+        // A picture-only clip carries no text at all; its description comes
+        // from imageSize, so nothing can ever be mistaken for a caption.
+        let pictureOnly = ClipItem(kind: .image, text: "", imageSize: "800×600")
+        expect(pictureOnly.captionText == nil, "picture-only clip has no caption")
+        expect(pictureOnly.displayTitle.contains("800×600"), "picture-only clip describes itself by size")
+
+        // ---- The full content matrix -------------------------------------
+        // Every realistic clipboard shape must come back with ALL of its parts:
+        // a copy can carry a picture, text and files at the same time, and none
+        // of them may be dropped on the way in or on the way out.
+        /// Runs the real capture on a scratch board. The build block returns any
+        /// temporary files it created so they can be removed *after* the capture
+        /// has read them.
+        func probeBoard(_ name: String, _ build: @MainActor (NSPasteboard) -> [URL]) -> (ClipItem?, NSImage?) {
+            let board = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.matrix.\(UUID().uuidString)"))
+            board.clearContents()
+            let scratch = build(board)
+            defer { scratch.forEach { try? FileManager.default.removeItem(at: $0) } }
+            let monitor = ClipboardMonitor(pasteboard: board)
+            var result: (ClipItem, NSImage?)? = nil
+            monitor.onCapture = { item, image in result = (item, image) }
+            monitor.captureNowForTesting()
+            return (result?.0, result?.1)
+        }
+        func solidImage(_ color: NSColor, _ w: CGFloat, _ h: CGFloat) -> NSImage {
+            let img = NSImage(size: NSSize(width: w, height: h))
+            img.lockFocus(); color.setFill(); NSRect(x: 0, y: 0, width: w, height: h).fill(); img.unlockFocus()
+            return img
+        }
+        func pngData(_ img: NSImage) -> Data? {
+            guard let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
+            return rep.representation(using: .png, properties: [:])
+        }
+
+        let cases: [(String, ClipKind, Bool, Bool, Bool)] = [
+            // name,                          kind,     hasText, hasImage, hasFiles
+            ("picture only",                   .image,   false,   true,    false),
+            ("text only",                      .text,    true,    false,   false),
+            ("picture + text (one item)",      .image,   true,    true,    false),
+            ("picture + text (two items)",     .image,   true,    true,    false),
+            ("html picture + text",            .image,   true,    true,    false),
+            ("png flavour + text",             .image,   true,    true,    false),
+            ("rtf picture + text",             .image,   true,    true,    false),
+            ("webarchive picture + text",      .image,   true,    true,    false),
+        ]
+        var index = 0
+        for (name, kind, hasText, hasImage, _) in cases {
+            let (item, image) = probeBoard(name) { board in
+                let img = solidImage(.systemTeal, 64, 44)
+                switch index {
+                case 0:
+                    let i = NSPasteboardItem()
+                    if let t = img.tiffRepresentation { i.setData(t, forType: .tiff) }
+                    board.writeObjects([i])
+                    return []
+                case 1:
+                    let i = NSPasteboardItem(); i.setString("纯文字内容", forType: .string)
+                    board.writeObjects([i])
+                    return []
+                case 2:
+                    let i = NSPasteboardItem()
+                    if let t = img.tiffRepresentation { i.setData(t, forType: .tiff) }
+                    i.setString("图片加文字", forType: .string)
+                    board.writeObjects([i])
+                    return []
+                case 3:
+                    let a = NSPasteboardItem()
+                    if let t = img.tiffRepresentation { a.setData(t, forType: .tiff) }
+                    let b = NSPasteboardItem(); b.setString("图片加文字", forType: .string)
+                    board.writeObjects([a, b])
+                    return []
+                case 4:
+                    let png = FileManager.default.temporaryDirectory.appendingPathComponent("matrix-html-\(UUID().uuidString).png")
+                    if let d = pngData(img) { try? d.write(to: png) }
+                    let i = NSPasteboardItem()
+                    i.setString("<html><body><p>图片加文字</p><img src=\"\(png.absoluteString)\"></body></html>", forType: .init("public.html"))
+                    i.setString("图片加文字", forType: .string)
+                    board.writeObjects([i])
+                    return [png]
+                case 5:
+                    let i = NSPasteboardItem()
+                    if let d = pngData(img) { i.setData(d, forType: .png) }
+                    i.setString("图片加文字", forType: .string)
+                    board.writeObjects([i])
+                    return []
+                case 6:
+                    // RTF with a hex-encoded PNG blob, the way Word and TextEdit do it.
+                    let hex = (pngData(img) ?? Data()).map { String(format: "%02x", $0) }.joined()
+                    let rtf = #"{\rtf1{\*\shppict{\pict\pngblip "# + hex + #"}}}"#
+                    let i = NSPasteboardItem()
+                    i.setData(rtf.data(using: .utf8)!, forType: .init("public.rtf"))
+                    i.setString("图片加文字", forType: .string)
+                    board.writeObjects([i])
+                    return []
+                default:
+                    // Web archive with a base64 image subresource.
+                    guard let png = pngData(img) else { return [] }
+                    let archive: [String: Any] = [
+                        "WebMainResource": ["WebResourceData": Data(), "WebResourceMIMEType": "text/html", "WebResourceURL": "about:blank"],
+                        "WebSubresources": [["WebResourceData": png, "WebResourceMIMEType": "image/png", "WebResourceURL": "about:blank"]]
+                    ]
+                    guard let plist = try? PropertyListSerialization.data(fromPropertyList: archive, format: .binary, options: 0) else { return [] }
+                    let i = NSPasteboardItem()
+                    i.setData(plist, forType: .init("com.apple.webarchive"))
+                    i.setString("图片加文字", forType: .string)
+                    board.writeObjects([i])
+                    return []
+                }
+            }
+            index += 1
+
+            expect(item != nil, "matrix \(name): something is captured")
+            if let item {
+                expect(item.kind == kind, "matrix \(name): kind is \(kind.rawValue), got \(item.kind.rawValue)")
+                if hasText {
+                    expect(item.captionText == "图片加文字" || item.captionText == "纯文字内容",
+                           "matrix \(name): text survives")
+                } else {
+                    expect(item.captionText == nil, "matrix \(name): no text is invented")
+                }
+                if hasImage {
+                    expect(image != nil, "matrix \(name): the picture is loaded")
+                    expect(item.imageSize != nil, "matrix \(name): the picture size is recorded")
+                } else {
+                    expect(image == nil, "matrix \(name): no picture is invented")
+                }
+            }
+        }
+
+        // ---- The paste side ------------------------------------------------
+        // An image+text clip must put BOTH on the board, so a rich-text target
+        // (a WeChat input box, for instance) receives the picture and the words.
+        do {
+            let board = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.pasteboth"))
+            let img = solidImage(.systemPink, 48, 32)
+            let clip = ClipItem(kind: .image, text: "图文一起粘贴", imageSize: "48×32")
+            PasteService.copy(clip, image: img, monitor: ClipboardMonitor(pasteboard: board), paste: false, pasteboard: board)
+            expect(board.data(forType: .tiff) != nil, "paste: the picture goes on the board")
+            expect(board.string(forType: .string) == "图文一起粘贴", "paste: the text goes on the board too")
+            // Plain-text mode writes only the words.
+            board.clearContents()
+            PasteService.copy(clip, image: img, monitor: ClipboardMonitor(pasteboard: board), paste: false, plainText: true, pasteboard: board)
+            expect(board.string(forType: .string) == "图文一起粘贴", "paste as plain text: only the words")
+            expect(board.data(forType: .tiff) == nil, "paste as plain text: no picture")
+        }
+
+        // ⌘1…⌘9: the digit key codes are not sequential on macOS, so compare
+        // the whole mapping against the documented Carbon values.
+        let expectedDigits: [UInt16: Int] = [
+            18: 1, 19: 2, 20: 3, 21: 4, 23: 5,
+            22: 6, 26: 7, 28: 8, 25: 9
+        ]
+        expect(PasteNextPanel.digitKeyCodes == expectedDigits, "⌘1…⌘9 key code mapping")
+
+        // A file clip must land on the pasteboard as plain data (the format
+        // Finder accepts), not as an NSURL promise it cannot consume.
+        do {
+            let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("PasteNext-selftest-write-\(UUID().uuidString).txt")
+            try Data("payload".utf8).write(to: fileURL)
+            let board = NSPasteboard.general
+            let clip = ClipItem(kind: .files, text: fileURL.lastPathComponent, filePaths: [fileURL.path])
+            PasteService.copy(clip, image: nil, monitor: ClipboardMonitor(pasteboard: board), paste: false, pasteboard: board)
+            expect(board.propertyList(forType: .init("NSFilenamesPboardType")) as? [String] == [fileURL.path],
+                   "file clip writes NSFilenamesPboardType")
+            expect(board.string(forType: .fileURL) == fileURL.absoluteString,
+                   "file clip writes public.file-url as plain text")
+            let objs = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) ?? []
+            expect(objs.count == 1, "file clip URL is readable back")
+            try? FileManager.default.removeItem(at: fileURL)
+        } catch { failures.append("file clipboard write: \(error)") }
+
+        // The donation QR codes must be present in the app bundle. They are
+        // copied in by scripts/build-app.sh, so this only applies to a real .app.
+        if Bundle.main.bundlePath.hasSuffix(".app") {
+            expect(NSImage(named: "donate-wechat") != nil, "donation WeChat QR bundled")
+            expect(NSImage(named: "donate-alipay") != nil, "donation Alipay QR bundled")
+        }
 
         if failures.isEmpty {
-            print("PasteNext self-test: 23/23 passed")
+            print("PasteNext self-test: 71/71 passed")
             exit(0)
         } else {
             failures.forEach { print("FAIL: \($0)") }

@@ -24,17 +24,21 @@ final class HistoryStore: ObservableObject {
     func add(_ item: ClipItem, image: NSImage? = nil) {
         var new = item
         if let existing = items.firstIndex(where: { isSameClip($0, item) }) {
+            // The same content is already in the history. Keep the card's
+            // identity and everything the user set on it, but treat this as a
+            // fresh copy — see the sort index below.
             let old = items.remove(at: existing)
             new.id = old.id
             new.isPinned = old.isPinned
             new.title = old.title
             new.imageFilename = old.imageFilename
             new.tags = old.tags
-            new.sortIndex = old.sortIndex
-        } else {
-            let highest = items.compactMap(\.sortIndex).max() ?? Date().timeIntervalSinceReferenceDate
-            new.sortIndex = highest + 1
         }
+        // A new copy always lands on top. Re-copying something already in the
+        // list used to refresh only its timestamp, which left the card stranded
+        // at its old position while it claimed to have "just" been copied.
+        let highest = items.compactMap(\.sortIndex).max() ?? Date().timeIntervalSinceReferenceDate
+        new.sortIndex = highest + 1
         if let image, new.kind == .image, new.imageFilename == nil {
             new.imageFilename = saveImage(image, id: new.id)
         }
@@ -96,6 +100,10 @@ final class HistoryStore: ObservableObject {
     /// same "screenshot 512x512" text, so the newer copy silently replaced the older card.
     private func isSameClip(_ lhs: ClipItem, _ rhs: ClipItem) -> Bool {
         guard lhs.kind == rhs.kind, lhs.text == rhs.text else { return false }
+        // A picture-only clip carries no text, so two different screenshots would
+        // otherwise look identical and the newer one would silently replace the
+        // older. The pixel size is what tells them apart.
+        guard lhs.imageSize == rhs.imageSize else { return false }
         if lhs.filePaths != nil || rhs.filePaths != nil {
             return (lhs.filePaths ?? []) == (rhs.filePaths ?? [])
         }
@@ -137,6 +145,19 @@ final class HistoryStore: ObservableObject {
         var normalized: [ClipItem] = []
         var staleImages: [String] = []
         for var item in saved {
+            // One-time migration: older builds stored a generated description
+            // ("Screenshot · 800×600") as the clip's text for picture-only clips.
+            // Text is now always the real text, so move that description into
+            // imageSize and clear the text.
+            if item.imageSize == nil, item.kind == .image {
+                let patterns = ["截图 · ", "Screenshot · ", "图片 · ", "Image · "]
+                if let hit = patterns.first(where: { item.text.hasPrefix($0) }) {
+                    item.imageSize = String(item.text.dropFirst(hit.count)).trimmingCharacters(in: .whitespaces)
+                    item.text = ""
+                } else if item.text == "图片" || item.text == "Image" {
+                    item.text = ""
+                }
+            }
             let isImageFile = item.filePaths?.allSatisfy { path in
                 let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
                 return ["png", "jpg", "jpeg", "tiff", "tif", "heic", "webp", "gif", "bmp"].contains(ext)

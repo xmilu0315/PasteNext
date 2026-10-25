@@ -216,6 +216,15 @@ final class AppState: ObservableObject {
         PasteService.copy(item, image: store.image(for: item), monitor: monitor, paste: shouldPaste, plainText: plainText)
         statusMessage = shouldPaste ? L("已粘贴", "Pasted") : L("已复制到剪贴板", "Copied to clipboard")
     }
+    /// Pastes the n-th card of the current list, for the ⌘1…⌘9 shortcuts.
+    /// The index follows what the user actually sees, so it also respects the
+    /// active tab and the search filter.
+    func pasteItem(at index: Int) {
+        let items = filteredItems
+        guard index >= 0, index < items.count else { return }
+        paste(items[index])
+    }
+
     func copyPath(_ item: ClipItem) {
         monitor.ignoreNextWrite()
         NSPasteboard.general.clearContents()

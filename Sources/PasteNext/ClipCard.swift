@@ -6,9 +6,12 @@ struct ClipCard: View, Equatable {
     let selected: Bool
     let image: NSImage?
     var compact = false
+    /// 1-based position in the visible list, shown as the ⌘n shortcut hint.
+    var shortcutIndex: Int? = nil
 
     static func == (lhs: ClipCard, rhs: ClipCard) -> Bool {
-        lhs.item == rhs.item && lhs.selected == rhs.selected && lhs.image === rhs.image && lhs.compact == rhs.compact
+        lhs.item == rhs.item && lhs.selected == rhs.selected && lhs.image === rhs.image
+            && lhs.compact == rhs.compact && lhs.shortcutIndex == rhs.shortcutIndex
     }
 
     var body: some View {
@@ -32,6 +35,15 @@ struct ClipCard: View, Equatable {
                         .background(Color.primary.opacity(0.05)).cornerRadius(3)
                     }
                     Text(item.createdAt.relativeDescription).font(.system(size: 9)).foregroundColor(.secondary)
+                    if let shortcutIndex {
+                        Text("⌘\(shortcutIndex)")
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundColor(selected ? .accentColor : .secondary)
+                            .padding(.horizontal, 4).padding(.vertical, 1.5)
+                            .background((selected ? Color.accentColor : Color.primary).opacity(0.10))
+                            .cornerRadius(3)
+                            .help(L("按 ⌘\(shortcutIndex) 直接粘贴", "Press ⌘\(shortcutIndex) to paste"))
+                    }
                 }
                 cardContent
             }
@@ -46,37 +58,72 @@ struct ClipCard: View, Equatable {
     }
 
     @ViewBuilder private var cardContent: some View {
-        switch item.kind {
-        case .image:
+        // A clip can carry a picture, text and files all at once, so show every
+        // part that is present instead of only the one that defined `kind`.
+        VStack(alignment: .leading, spacing: 6) {
             if let image {
                 Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: compact ? 105 : 150, alignment: .leading)
+                    .frame(maxWidth: .infinity, maxHeight: compact ? 78 : 118, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 5))
-            } else { Label(L("图片不可用", "Image unavailable"), systemImage: "photo") }
-        case .files:
-            HStack(spacing: 7) {
-                Image(systemName: "doc.fill").font(.system(size: compact ? 15 : 17)).foregroundColor(.accentColor)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.displayTitle).font(.system(size: compact ? 11 : 13, weight: .medium)).lineLimit(2)
-                    if let path = item.filePaths?.first {
-                        Text(URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent)
-                            .font(.system(size: 9)).foregroundColor(.secondary).lineLimit(1)
+            }
+
+            switch item.kind {
+            case .color:
+                colorSwatch
+            case .files:
+                filesRow
+            case .image:
+                // The picture could not be read back; fall back to the text that
+                // came with it, and only then to a placeholder.
+                if image == nil {
+                    if let caption = item.captionText {
+                        Text(caption).font(.system(size: compact ? 11 : 13))
+                            .lineLimit(compact ? 2 : 4).truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Label(L("图片不可用", "Image unavailable"), systemImage: "photo")
                     }
                 }
+            case .text, .link, .code:
+                if let caption = item.captionText {
+                    kindText(caption)
+                }
             }
-        case .color:
-            HStack {
-                RoundedRectangle(cornerRadius: 6).fill(Color(hex: item.text) ?? .clear).frame(width: 34, height: 34)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.1)))
-                Text(item.text).font(.system(size: 15, weight: .semibold, design: .monospaced))
-            }
+        }
+    }
+
+    /// The text block for the non-picture kinds, keeping each one's own look.
+    @ViewBuilder private func kindText(_ text: String) -> some View {
+        switch item.kind {
         case .code:
-            Text(item.text).font(.system(size: compact ? 10 : 12, design: .monospaced)).foregroundColor(.white.opacity(0.92))
+            Text(text).font(.system(size: compact ? 10 : 12, design: .monospaced)).foregroundColor(.white.opacity(0.92))
                 .lineLimit(compact ? 3 : 5).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
         case .link:
             Label(item.displayTitle, systemImage: "safari").font(.system(size: compact ? 11 : 13, weight: .medium)).foregroundColor(.blue).lineLimit(2)
-        case .text:
-            Text(item.displayTitle).font(.system(size: compact ? 11 : 13)).lineLimit(compact ? 2 : 4).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
+        default:
+            Text(item.displayTitle).font(.system(size: compact ? 11 : 13))
+                .lineLimit(compact ? 2 : 4).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var colorSwatch: some View {
+        HStack {
+            RoundedRectangle(cornerRadius: 6).fill(Color(hex: item.text) ?? .clear).frame(width: 34, height: 34)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.1)))
+            Text(item.text).font(.system(size: 15, weight: .semibold, design: .monospaced))
+        }
+    }
+
+    private var filesRow: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "doc.fill").font(.system(size: compact ? 15 : 17)).foregroundColor(.accentColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.displayTitle).font(.system(size: compact ? 11 : 13, weight: .medium)).lineLimit(2)
+                if let path = item.filePaths?.first {
+                    Text(URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent)
+                        .font(.system(size: 9)).foregroundColor(.secondary).lineLimit(1)
+                }
+            }
         }
     }
 

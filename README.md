@@ -4,7 +4,7 @@
 
 PasteNext 是一款常驻菜单栏的 macOS 剪贴板历史工具。它轻量轮询 `NSPasteboard.changeCount`，**只在剪贴板真正变化时**才读取内容，自动把文本、代码、链接、颜色、图片和文件分类归档；配合全局快捷键即可秒级回取任何刚复制过的东西。
 
-- **版本**：1.3.6
+- **版本**：1.3.7
 - **系统要求**：macOS 13 (Ventura) 及以上 · 通用二进制（Apple Silicon / Intel 均可运行）
 - **技术栈**：Swift 5.9 / SwiftUI + AppKit / Swift Package Manager
 - **依赖**：无第三方库（仅系统框架 AppKit、SwiftUI、Carbon、CoreGraphics）
@@ -12,33 +12,16 @@ PasteNext 是一款常驻菜单栏的 macOS 剪贴板历史工具。它轻量轮
 
 ---
 
-## 支持作者 ☕
-
-PasteNext 是我一个人从零做出来的：没有团队、没有投资、没有订阅制，**所有更新永久免费**。
-
-如果你觉得它省了你一点时间，**欢迎请我喝杯咖啡** —— 这笔钱会直接变成下一个功能（比如 iCloud 同步、剪贴板分类规则、全局快捷键自定义面板）的开发时间。
-
-| 微信 | 支付宝 |
-| :---: | :---: |
-| ![微信收款码](Resources/donate-wechat.png) | ![支付宝收款码](Resources/donate-alipay.png) |
-
-**扫码方式**：应用内 **设置 → 关于 → 鼠标悬停在「支持作者」上**即可展开这两张收款码。
-
-也可以直接搜索微信号 **迷彩小懒猪（\*帆）** 微信支付，或使用支付宝扫码。
-
-> 每一笔捐赠都会收到一句谢谢 ☕，这比数字本身更让人开心。
-
----
-
 ## 目录
 
-- [支持作者 ☕](#支持作者-)
+- [界面截图](#界面截图)
 - [功能总览](#功能总览)
 - [交互速查](#交互速查)
 - [技术设计](#技术设计)
   - [整体架构](#整体架构)
   - [剪贴板捕获管线](#剪贴板捕获管线)
   - [内容类型判定](#内容类型判定)
+  - [图文混合内容模型](#图文混合内容模型)
   - [文件剪贴板的关键设计](#文件剪贴板的关键设计)
   - [历史存储](#历史存储)
   - [浮窗与窗口行为](#浮窗与窗口行为)
@@ -47,10 +30,28 @@ PasteNext 是我一个人从零做出来的：没有团队、没有投资、没�
   - [多选与批量操作](#多选与批量操作)
   - [标签系统](#标签系统)
   - [隐私设计](#隐私设计)
+  - [诊断日志](#诊断日志)
   - [国际化](#国际化)
 - [工程结构](#工程结构)
 - [构建与自测](#构建与自测)
-- [上架素材](#上架素材)
+- [支持作者 ☕](#支持作者-)
+- [许可](#许可)
+
+---
+
+## 界面截图
+
+| 主浮窗 | 右键菜单（文件） | 右键菜单（文本） |
+| :---: | :---: | :---: |
+| ![主浮窗](screenshots/01-main-panel.jpg) | ![右键菜单文件](screenshots/02-context-menu-file.jpg) | ![右键菜单文本](screenshots/03-context-menu-text.jpg) |
+
+| 设置 · 通用 | 设置 · 快捷键 | 设置 · 隐私与规则 |
+| :---: | :---: | :---: |
+| ![设置通用](screenshots/04-settings-general.png) | ![设置快捷键](screenshots/05-settings-shortcuts.png) | ![设置隐私](screenshots/06-settings-privacy.png) |
+
+| 设置 · 关于 | 安装包 |
+| :---: | :---: |
+| ![设置关于](screenshots/07-settings-about.png) | ![安装包](screenshots/09-Installation-package.png) |
 
 ---
 
@@ -62,6 +63,7 @@ PasteNext 是我一个人从零做出来的：没有团队、没有投资、没�
 |---|---|
 | 变更检测 | 轮询 `changeCount`，仅在剪贴板变化时读取内容，默认间隔 0.5 秒可调 |
 | 自动分类 | 文本 / 代码 / 链接 / 颜色 / 图片 / 文件 六类，卡片样式各不相同 |
+| **图文混合** | 一条剪贴板可同时含图片与文字，两者都会保留并完整粘贴（见[图文混合内容模型](#图文混合内容模型)） |
 | 来源标注 | 每张卡片显示来源应用图标与名称，时间以相对时间呈现 |
 | 接力支持 | 支持 macOS 通用剪贴板（接力），并为来自 iPhone 的内容标注来源 |
 | 捕获提示音 | 四种音效可选（咔嗒 / 轻触 / 气泡 / 静音），支持试听 |
@@ -69,14 +71,16 @@ PasteNext 是我一个人从零做出来的：没有团队、没有投资、没�
 ### 浏览与检索
 
 - 顶部搜索框实时过滤（`⌘F` 快速聚焦）。
-- 分类页签：全部 / 常驻 / 今天 / 自定义标签。
+- 分类页签：全部 / 常驻 / 今天 / 自定义标签。**图文卡片会同时出现在「图片」和「文本」页签下**。
 - 自定义标签页签与内置页签之间有分隔线区分。
 - 切换页签时，当前激活页签自动滚动到可见位置，不会被窗口边缘挡住。
 - 底部状态栏显示内容数量统计与快捷键提示。
+- 卡片底色按内容类型区分：文本近中性，链接 / 代码 / 颜色 / 图片 / 文件各有其色。
 
 ### 粘贴与复用
 
 - `↵` 或 **双击**：粘贴选中内容。
+- `⌘1` … `⌘9`：直接粘贴第 1-9 张卡片（**仅浮窗聚焦时生效**，不注册全局热键，避免与其他应用冲突）。
 - `⇧↵` 或 **⇧双击**：粘贴为纯文本；**文件卡片则粘贴绝对路径**。
 - 右键菜单**按内容类型定制**：文件卡片显示「粘贴为路径」「仅复制路径」，文本卡片显示「粘贴为纯文本」。
 - 粘贴后自动隐藏浮窗并切回原应用。
@@ -105,7 +109,6 @@ PasteNext 是我一个人从零做出来的：没有团队、没有投资、没�
 | 快捷键 | 作用 |
 |---|---|
 | `⌃V`（可自定义） | 激活 PasteNext 浮窗（**无需辅助功能权限**） |
-| `⌘F` | 聚焦搜索框 |
 
 ### 浮窗内
 
@@ -114,6 +117,7 @@ PasteNext 是我一个人从零做出来的：没有团队、没有投资、没�
 | `↑` / `↓` | 选择上一条 / 下一条 |
 | `⌘←` / `⌘→` | 切换标签页 |
 | `↵` | 粘贴选中内容 |
+| `⌘1` … `⌘9` | 直接粘贴第 1-9 张卡片（仅浮窗聚焦时有效） |
 | **双击** | 粘贴选中内容（等同回车） |
 | `⇧↵` | 粘贴为纯文本 / 文件路径 |
 | **⇧双击** | 粘贴为纯文本 / 文件路径 |
@@ -123,6 +127,10 @@ PasteNext 是我一个人从零做出来的：没有团队、没有投资、没�
 | `⌘⌫` | 删除选中内容 |
 | `⌘R` | 重置界面状态 |
 | `⌘W` | 关闭浮窗 |
+
+> **关于辅助功能权限**：全局激活快捷键（`⌃V`）走 Carbon 热键，**不需要任何权限**。
+> 只有「回车 / 双击自动粘贴」这一步需要辅助功能权限（用于向目标应用投递 `⌘V`）。
+> 未授权时应用会弹系统授权面板，并在状态栏给出明确提示，**不会静默失败**。
 
 ---
 
@@ -165,37 +173,57 @@ PasteNext 是我一个人从零做出来的：没有团队、没有投资、没�
 3. **来源识别**：优先读取 `org.nspasteboard.source` 声明的源应用，失败时回退到 `NSWorkspace.frontmostApplication`。
 4. **排除列表**：命中用户在「隐私与规则」里排除的应用则跳过。
 5. **自写忽略**：粘贴自身写回剪贴板时，通过 `ignoreNextWrite()` 记录 `changeCount` 避免自捕获。
-6. **读取内容**：
+6. **读取内容**（三条通道互相独立，可同时成立）：
    - 文件：先 `readObjects(forClasses: [NSURL.self])`，再用 `.fileURL` / `.URL` / `text/uri-list` / `NSFilenamesPboardType` 多路兜底，最后扫 Qt 私有 MIME blob。
-   - 图片：`.tiff` / `.png` / `public.jpeg` / `public.heic` / `public.webp` / GIF / BMP。
+   - 图片：`.tiff` / `.png` / `public.jpeg` / `public.heic` / `public.webp` / GIF / BMP；失败再依次尝试 RTF 内嵌图、WebArchive 子资源、HTML 内 `<img>`。
    - 文本：`.string`。
 7. **去抖**：检测到变化后延迟 60ms 合并「先清空再写入」的多步序列，避免抓到中间态。
 
 ### 内容类型判定
 
-`ClipClassifier.classify(_:hasImage:hasFiles:)` 依据**内容特征**而非扩展名白名单：
+`ClipKind` 只决定**图标、页签归属和卡片底色**，不再决定「这条内容有什么」。`ClipClassifier` 依据内容特征判定主类型：
 
 | 顺序 | 判定 | 规则 |
 |---|---|---|
 | 1 | `.files` | 剪贴板存在文件 URL |
-| 2 | `.image` | 存在图片数据或图片文件 |
+| 2 | `.image` | 存在图片数据或图片文件（截图工具临时文件除外，见下） |
 | 3 | `.color` | 匹配 `#RRGGBB` / `#RRGGBBAA` |
 | 4 | `.link` | `http` / `https` 且含 host、不含换行 |
 | 5 | `.code` | 含换行且命中 `func / class / struct / import / def / return / const / let / var / public / private / #include / => / </ / {` 等特征 |
 | 6 | `.text` | 其余 |
 
+### 图文混合内容模型
+
+这是本项目踩坑最深的一块。核心事实：**一条剪贴板可以同时包含图片、文字和文件**，而 macOS 各家应用写入图片的方式完全不同——
+
+| 来源 | 图片藏在哪 |
+|---|---|
+| 微信输入框 | 临时目录下的 PNG 文件 URL + 纯文本 |
+| 浏览器（WebKit） | `com.apple.flat-rtfd` / `com.apple.webarchive`，**没有独立图片 flavor** |
+| 浏览器（Chromium） | `public.html` 里的 `<img src="...">`，src 常为相对路径 |
+| Word / TextEdit | `public.rtf` 里的 `\pngblip` 十六进制块 |
+
+因此模型设计成三条不变式：
+
+- **`text` 永远是真实文本**，绝不掺入生成物。纯图片卡片 `text` 为空，由 `imageSize`（如 `"800×600"`）负责描述与去重。
+- **`captionText` 独立于 `kind`**：图文卡片即使主类型是 `.image`，也能取回自己的文字。
+- **渲染与粘贴都输出全部内容**：卡片同时画图和字；粘贴时同时写图片 flavor 和 `.string`，富文本目标（如微信输入框）能收到完整内容。
+
+图片提取按顺序尝试六条路径，任一条成功即止：独立 flavor → 逐 flavor 兜底 → 文件 URL → 任意 blob 特征码扫描 → RTF 十六进制 → WebArchive → HTML（`data:` / `file://` / 按源页面解析的相对路径）。**远程 URL 一律不抓取**，以保持「零网络请求」的承诺。
+
+> 早期版本曾用 `text.hasPrefix("图片")` 之类的前缀启发式区分「真实图注」和「生成描述」，结果把「图片后面的文字」误判为描述、清掉了图注。现在完全不需要这种猜测。
+
 ### 文件剪贴板的关键设计
 
-这是本项目最容易出错的一块，核心矛盾在于：**访达复制文件时，剪贴板同时写入「文件 URL」和「文件图标的 TIFF 预览」**。
-
-早期实现用 `image != nil ? .image : ...` 判定类型，导致任何格式的文件都被当成图片，粘贴时写出 TIFF 而非原文件。修复后的设计：
+核心矛盾在于：**访达复制文件时，剪贴板同时写入「文件 URL」和「文件图标的 TIFF 预览」**。
 
 - **文件 URL 优先**：只要存在文件 URL，即判定为 `.files`。
 - **截图工具例外**：若文件全部是图片、且来自临时目录（`/var/folders/`、`/tmp/`、`/temp/`、`/TemporaryItems/`、`Screenshot`）或来自 PixPin 等已知截图工具，则仍按图片处理——因为那些临时文件很快会被清理，只存路径会导致内容失效。
-- **路径兜底不再受限于图片**：`parseFileURL()` 接受任意文件路径（`file://` 或绝对路径），云盘未下载的 promise 文件也保留路径。
-- **去重带路径**：历史去重键为 `kind + text + filePaths`。此前不同文件都叫「截图 · 512×512」会被判为同一条，新复制静默覆盖旧卡片。
-- **历史自动纠正**：启动时把历史中 `kind == .image` 但路径并非图片的旧条目自动回填为 `.files`。
-- **格式无关**：判定依据是「剪贴板里有没有文件 URL」，而不是扩展名白名单。已用 42 种格式（xlsx/docx/pptx/pdf/mp4/mov/zip/rar/7z/png/jpg/gif/svg/csv/py/dmg/pkg/app/ttf/psd/ai/pages/numbers/iso/epub/mobi/rtf/wav/mp3/sql/db …）回归验证，**42/42 全部正确识别**。
+- **写入用纯数据，不用 `NSURL` 对象**：`NSPasteboard.writeObjects([NSURL])` 并不是写入一个普通 URL，而是写入一个**文件承诺（file promise + sandbox extension）**，接收方必须回头找写入进程兑现。PasteNext 是 ad-hoc 签名且非沙箱，该承诺永远无法被消费——访达因此拒绝粘贴并播放「空剪贴板」提示音。改为访达原生写法：`setPropertyList(paths, forType: NSFilenamesPboardType)` + `setString(url, forType: .fileURL)`，多文件再补 `text/uri-list`。
+- **写入前校验，绝不留空剪贴板**：任何一条写入失败都会回退到纯文本，不会出现「清空了却什么都没写进去」。
+- **去重带路径与尺寸**：去重键为 `kind + text + imageSize + filePaths`。
+- **历史自动纠正**：启动时把历史中 `kind == .image` 但路径并非图片的旧条目回填为 `.files`；并把旧版写成文本的「截图 · 800×600」描述迁入 `imageSize`。
+- **格式无关**：判定依据是「剪贴板里有没有文件 URL」，而非扩展名白名单。已用 42 种格式（xlsx/docx/pptx/pdf/mp4/mov/zip/rar/7z/png/jpg/gif/svg/csv/py/dmg/pkg/app/ttf/psd/ai/pages/numbers/iso/epub/mobi/rtf/wav/mp3/sql/db …）回归验证，**42/42 全部正确识别**。
 
 ### 历史存储
 
@@ -205,6 +233,7 @@ PasteNext 是我一个人从零做出来的：没有团队、没有投资、没�
 - 写入策略：防抖 0.35s 后原子写（`.atomic`），避免高频捕获时的 IO 抖动。
 - 裁剪：超过上限时优先保留置顶条目。
 - 图片缓存：`NSCache` 限制 40 张，避免内存膨胀。
+- **排序**：常驻条目置顶，其余按复制时间新的在前。**重复复制同一内容会把它移回顶部**（早期版本只刷新时间戳不移位，导致卡片声称「刚刚」却停在原处）。
 - 历史上限、轮询间隔、排除列表、界面语言、快捷键等均存于 `UserDefaults`。
 
 ### 浮窗与窗口行为
@@ -216,14 +245,13 @@ PasteNext 是我一个人从零做出来的：没有团队、没有投资、没�
 
 ### 粘贴投递
 
-`PasteService.copy(_:image:monitor:paste:plainText:)` 的执行顺序经过实测校准：
+`PasteService.copy(_:image:monitor:paste:plainText:pasteboard:)` 的执行顺序经过实测校准：
 
-1. 写入剪贴板（文件写 `NSURL` 对象 + `public.file-url` 字符串双保险；纯文本走 `plainTextRepresentation`，文件即绝对路径）。
+1. **写入剪贴板**：按内容类型分派——文件写 `NSFilenamesPboardType` + `public.file-url` 纯数据；图片写 TIFF（必要时回退 PNG）；文字写 `.string`。三者可同时存在，全部写入。
 2. 通过 `NSWorkspace.didActivateApplicationNotification` **持续记录**「最近一个非本应用的前台应用」（`AppState.pasteTarget`），而非在面板弹出的瞬间采样——因为点击菜单栏图标时应用自身可能已成为前台，瞬时采样会拿到自己。
 3. `activate()` 目标应用，**非阻塞轮询**等待它真正成为 `frontmostApplication`（20 × 50ms）。
 4. 确认目标在前台后，才通过 `CGEvent` 发送 `⌘V`。
-
-发送 `⌘V` 需要辅助功能权限（`AXIsProcessTrusted`），未授权时会主动提示；**全局激活快捷键不需要**该权限。
+5. 若辅助功能权限缺失：**不发送按键、不清空剪贴板**，状态栏明确提示并弹出系统授权面板。
 
 ### 拖拽系统
 
@@ -247,8 +275,18 @@ PasteNext 是我一个人从零做出来的：没有团队、没有投资、没�
 
 - 密码管理器标记的敏感内容（`ConcealedType`）永不捕获。
 - 1Password 与 KeeWeb 默认排除；用户可在设置中**拖拽 `.app` 文件**或点击选择本机应用来追加排除项，无需手填 Bundle ID。
-- 全部历史仅保存在本机，**不联网、不上传、无任何后台网络请求**。
+- 全部历史仅保存在本机，**不联网、不上传、无任何后台网络请求**（提取远程图片的尝试被刻意省略，就是为了守住这条）。
 - 接力内容默认正常记录并标注 iPhone 来源。
+
+### 诊断日志
+
+捕获与粘贴都会做一系列判断——图片从哪来、文字是否存活、什么真正落进了剪贴板。这些在真实机器上不可见，所以写入：
+
+```
+~/Library/Logs/PasteNext/pastenext.log
+```
+
+每行一个事件，形如 `capture.done kind=image hasText=true hasImage=true imageFrom=webarchive imageSize=800×600`。排障时先看这个文件，比复述现象高效得多。
 
 ### 国际化
 
@@ -262,20 +300,26 @@ PasteNext 是我一个人从零做出来的：没有团队、没有投资、没�
 PasteNext/
 ├── Package.swift                  SPM 包定义（macOS 13+）
 ├── README.md                      本文档
+├── LICENSE                        MIT
 ├── Resources/
 │   ├── Info.plist                 应用配置（LSUIElement、版本、图标）
 │   ├── AppIcon.icns               应用图标（矢量母版经 make-icon.swift 生成）
 │   ├── AppIcon.svg                图标矢量母版
-│   └── IconOptions/               历史候选图标归档
+│   ├── AppIcon-1024.png           图标母版位图
+│   ├── donate-wechat.png          捐赠收款码（应用内「关于」页使用）
+│   ├── donate-alipay.png          捐赠收款码
+│   ├── dmg-background.png         DMG 拖拽引导底图
+│   └── PasteNext.iconset/         icns 中间产物
+├── screenshots/                   README 与上架用界面截图
 ├── Sources/PasteNext/
-│   ├── PasteNextApp.swift         入口、AppDelegate、菜单栏
+│   ├── PasteNextApp.swift         入口、AppDelegate、菜单栏、调试开关
 │   ├── AppState.swift             中心状态与业务逻辑
 │   ├── ClipboardMonitor.swift     剪贴板捕获管线
-│   ├── HistoryStore.swift         历史持久化
-│   ├── Models.swift               数据模型与内容分类
+│   ├── HistoryStore.swift         历史持久化、去重、排序、迁移
+│   ├── Models.swift               数据模型与内容分类、配色
 │   ├── ContentView.swift          浮窗主界面
 │   ├── ClipCard.swift             卡片视图
-│   ├── PanelController.swift      浮窗控制器
+│   ├── PanelController.swift      浮窗控制器与面板内快捷键
 │   ├── ResizeHandles.swift        自定义缩放热区
 │   ├── OverlayScrollerConfigurator.swift  overlay 滚动条
 │   ├── PasteService.swift         剪贴板写入与粘贴投递
@@ -285,19 +329,20 @@ PasteNext/
 │   ├── PreviewEditViews.swift     预览 / 编辑
 │   ├── SettingsView.swift         设置面板
 │   ├── CaptureSound.swift         捕获提示音
+│   ├── Diagnostics.swift          诊断日志
 │   ├── Localizable.swift          中英文案
-│   └── SelfTest.swift             自检用例
+│   ├── SelfTest.swift             自检用例
+│   └── AboutSnapshotView.swift    仅 DEBUG：关于页快照渲染
 ├── scripts/
-│   ├── build-app.sh               release 构建 + 签名 + 打包 DMG
+│   ├── build-app.sh               release 构建（双架构）+ 签名 + 打包 DMG
 │   ├── make-icon.swift            矢量应用图标生成
-│   ├── make-poster.swift          竖版长图海报生成
-│   ├── make-posters.swift         分块上架海报生成（App Store + 闲鱼）
 │   ├── make-dmg-background.swift   DMG 拖拽引导底图生成
 │   ├── make-donation-qr.swift      捐赠收款码裁切与统一样式
 │   └── dmg/                        DMG 打包与布局校验工具
-├── Marketing/                     上架素材（分块海报 + 截图 + 文案）
-└── Dist/PasteNext-1.3.6.dmg       可分发安装镜像（DMG）
+└── Dist/PasteNext-1.3.7.dmg       可分发安装镜像（DMG）
 ```
+
+> 上架素材（海报、文案）与海报生成脚本存放在独立工作区 `PasteNext 营销/`，不纳入本仓库。
 
 ---
 
@@ -307,53 +352,45 @@ PasteNext/
 # 调试构建
 swift build
 
-# 运行内置自检（21 条断言）
+# 运行内置自检（71 条断言）
 .build/debug/PasteNext --self-test
 
-# release 构建 + 临时签名 + 打包为 DMG
+# release 构建 + 临时签名 + 打包为 DMG（通用二进制）
 ./scripts/build-app.sh
-# 产物：Dist/PasteNext-1.3.6.dmg
+# 产物：Dist/PasteNext-1.3.7.dmg
 # DMG 内含 PasteNext.app、/Applications 软链接与安装说明
 
 # 重新生成矢量应用图标
 swift scripts/make-icon.swift Resources/AppIcon-1024.png
+
+# 重新生成捐赠收款码
+swift scripts/make-donation-qr.swift "$(pwd)" <微信码路径> <支付宝码路径>
 ```
 
-自检覆盖：内容分类、持久化往返、截图与文件剪贴板识别、访达文件复制保持为文件、纯路径剪贴板捕获、文件绝对路径表示等。
+自检覆盖：内容分类、持久化往返、截图与文件剪贴板识别、访达文件复制保持为文件、纯路径剪贴板捕获、文件绝对路径表示、`⌘1…⌘9` 键码映射、配色六类两两可区分、**8 种剪贴板形态的完整矩阵**（纯图 / 纯文 / 图文单 item / 图文双 item / HTML / PNG flavor / RTF 内嵌图 / WebArchive）以及粘贴侧的图文双写。
 
 ---
 
-## 上架素材
+## 支持作者 ☕
 
-`Marketing/` 目录存放应用商店/推广所需素材：
+PasteNext 是我一个人从零做出来的：没有团队、没有投资、没有订阅制，**所有更新永久免费**。
 
-```
-Marketing/
-├── posters/                         分块海报
-│   ├── 01-cover.png                 2560×1600  封面·核心卖点（首图）
-│   ├── 02-light-and-privacy.png     2560×1600  轻量与隐私
-│   ├── 03-keyboard.png              2560×1600  全键盘控制
-│   ├── 04-preview-and-edit.png      2560×1600  预览与编辑
-│   ├── 05-tags-and-batch.png        2560×1600  标签与批量整理
-│   ├── 06-all-features.png          2560×1600  功能总览
-│   └── xianyu/                      闲鱼竖版 1080×1440
-│       ├── x1-cover.png             商品主图
-│       ├── x2-features.png          功能详情
-│       └── x3-privacy.png           隐私详情
-├── screenshots/                     7 张界面截图素材（海报来源）
-├── 海报说明.md                       排版说明 + 闲鱼标题/描述文案
-└── 介绍文案.md                       中英文描述、关键词、图注
-```
+如果你觉得它省了你一点时间，**欢迎请我喝杯咖啡** —— 这笔钱会直接变成下一个功能（比如 iCloud 同步、剪贴板分类规则、全局快捷键自定义面板）的开发时间。
 
-海报为矢量绘制生成，改动文案后重新出图：
+| 微信 | 支付宝 |
+| :---: | :---: |
+| ![微信收款码](Resources/donate-wechat.png) | ![支付宝收款码](Resources/donate-alipay.png) |
 
-```bash
-swift scripts/make-posters.swift "$(pwd)"
-# 产物：Marketing/posters/*.png 与 Marketing/posters/xianyu/*.png
-```
+**扫码方式**：应用内 **设置 → 关于 → 鼠标悬停在「支持作者」上**即可展开这两张收款码。
+
+也可以直接搜索微信号 **迷彩小懒猪（\*帆）** 微信支付，或使用支付宝扫码。
+
+> 每一笔捐赠都会收到一句谢谢 ☕，这比数字本身更让人开心。
 
 ---
 
 ## 许可
+
+MIT License，详见 [LICENSE](LICENSE)。
 
 作者：xmilu0315@foxmail.com

@@ -5,6 +5,14 @@ final class PasteNextPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    /// macOS virtual key codes for the digits 1-9. They are not sequential.
+    /// Exposed for the self-test: the mapping is not sequential, so a
+    /// typo here silently breaks a shortcut.
+    static let digitKeyCodes: [UInt16: Int] = [
+        18: 1, 19: 2, 20: 3, 21: 4, 23: 5,
+        22: 6, 26: 7, 28: 8, 25: 9
+    ]
+
     override func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown, event.keyCode == 123 || event.keyCode == 124 {
             let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
@@ -18,6 +26,15 @@ final class PasteNextPanel: NSPanel {
                 AppState.shared.moveSelection(event.keyCode == 125 ? 1 : -1)
                 return
             }
+        }
+        // ⌘1…⌘9 paste the n-th card. This lives in the panel's own event path,
+        // so it only fires while the PasteNext window is open and focused — it
+        // is deliberately NOT a global hotkey, because ⌘1…⌘9 belong to other apps.
+        if event.type == .keyDown,
+           let digit = Self.digitKeyCodes[event.keyCode],
+           event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command {
+            AppState.shared.pasteItem(at: digit - 1)
+            return
         }
         super.sendEvent(event)
     }

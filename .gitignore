@@ -12,7 +12,7 @@ DerivedData/
 *.app
 
 # ---- Marketing material (上架素材，不纳入开源仓库) ----
-# 海报、截图、文案均属运营物料，源码仓库不需要
+# 海报、截图、文案均属运营物料，已移至独立工作区 PasteNext 营销/（仓库同级目录）
 Marketing/
 
 # ---- Local tooling ----

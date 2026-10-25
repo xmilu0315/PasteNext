@@ -39,6 +39,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // No window is created at launch. The panel exists only while the user asks for it.
         #if DEBUG
+        // True end-to-end: puts a realistic payload on the REAL general
+        // pasteboard, lets the REAL monitor with its REAL timer capture it,
+        // then reports what the app stored and what it would put back.
+        //   --e2e --file   → a Finder-style file copy
+        //   --e2e --image  → a browser-style image+text copy
         if CommandLine.arguments.contains("--show-panel") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { PanelController.shared.show() }
         }
