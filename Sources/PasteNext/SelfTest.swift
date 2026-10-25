@@ -396,51 +396,102 @@ enum SelfTest {
             expect(store2.items.count == 2, "a copy far apart in time does not merge")
         }
 
-        // ---- Collected clips survive clearing and trimming ------------------
+        // ---- Legacy tagged clips become saved copies ------------------------
+        do {
+            let legacy = """
+            [{"id":"22222222-2222-2222-2222-222222222222","kind":"text","text":"旧标签条目",
+              "createdAt":"2026-10-25T10:00:00Z","isPinned":false,"isRemote":false,"tags":["常用"]}]
+            """
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            if let items = try? decoder.decode([ClipItem].self, from: Data(legacy.utf8)) {
+                expect(items.first?.folder == "常用", "a legacy tag becomes a folder")
+                expect(items.first?.isSaved == true, "a legacy tagged clip is a saved copy")
+            } else {
+                expect(false, "legacy tagged history decodes")
+            }
+        }
+
+        // ---- Folders hold independent copies -------------------------------
         do {
             let scratch = FileManager.default.temporaryDirectory
-                .appendingPathComponent("pastenext-selftest-archive-\(UUID().uuidString)", isDirectory: true)
+                .appendingPathComponent("pastenext-selftest-folder-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: scratch) }
             let store = HistoryStore(directory: scratch, load: false)
 
-            let plain = ClipItem(kind: .text, text: "普通历史")
-            let pinned = ClipItem(kind: .text, text: "常驻", isPinned: true)
-            let tagged = ClipItem(kind: .text, text: "归入标签", tags: ["常用"])
-            store.add(plain)
-            store.add(pinned)
-            store.add(tagged)
+            let image = solidImage(.systemTeal, 64, 44)
+            let original = ClipItem(kind: .image, text: "要收藏的图文", imageSize: "64×44")
+            store.add(original, image: image, htmlData: Data("<html>正文</html>".utf8))
+            let stored = store.items[0]
+            let historyImage = stored.imageFilename
 
-            expect(plain.isArchived == false, "a plain clip is not collected")
-            expect(pinned.isArchived, "a pinned clip is collected")
-            expect(tagged.isArchived, "a tagged clip is collected")
+            expect(store.archive(stored, to: "常用"), "archiving returns true")
+            expect(store.items.count == 2, "archiving adds a copy, not a tag")
+            let copy = store.savedItems(in: "常用").first
+            expect(copy != nil, "the copy lives in the folder")
+            expect(copy?.id != stored.id, "the copy has its own identity")
+            expect(copy?.text == "要收藏的图文", "the copy keeps the content")
+            expect(copy?.imageFilename != nil && copy?.imageFilename != historyImage,
+                   "the copy owns its own image file")
+            expect(copy?.htmlFilename != nil, "the copy owns its own HTML file")
+            expect(store.historyItems.count == 1, "history still shows the original")
 
-            let split = AppState.splitDeletion(ids: [plain.id, pinned.id, tagged.id], items: store.items)
-            expect(split.collected.count == 2, "pinned and tagged clips need confirmation")
-            expect(split.plain == [plain.id], "the plain clip deletes without asking")
+            // Archiving the same content twice does not duplicate it.
+            expect(store.archive(stored, to: "常用") == false, "archiving again is a no-op")
+            expect(store.savedItems(in: "常用").count == 1, "no duplicate in the folder")
 
+            // Deleting the history original must not touch the saved copy.
+            store.delete(stored)
+            expect(store.savedItems(in: "常用").count == 1,
+                   "the saved copy survives deleting the history original")
+            if let copyImage = copy?.imageFilename {
+                expect(FileManager.default.fileExists(
+                    atPath: scratch.appendingPathComponent("Images/\(copyImage)").path),
+                       "the copy's image file is still on disk")
+            }
+
+            // Clearing the history keeps saved copies.
+            store.add(ClipItem(kind: .text, text: "普通历史"))
             let result = store.clearHistory()
-            expect(result.removed == 1, "clear history removes only the plain clip")
-            expect(result.kept == 2, "clear history keeps both collected clips")
-            expect(store.items.contains(where: { $0.id == tagged.id }),
-                   "a clip filed under a tag survives clear history")
+            expect(result.kept == 1, "clear history keeps the folder copy, got \(result.kept)")
+            expect(store.savedItems(in: "常用").count == 1, "the folder copy is untouched")
         }
 
-        // ---- Collected clips are never evicted by the size limit ------------
+        // ---- Saved copies are never evicted by the size limit ---------------
         do {
             let scratch = FileManager.default.temporaryDirectory
                 .appendingPathComponent("pastenext-selftest-trim-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: scratch) }
             let store = HistoryStore(directory: scratch, load: false)
+            let keep = ClipItem(kind: .text, text: "收藏的那条")
+            store.add(keep)
+            store.archive(store.items[0], to: "常用")
             store.limit = 2
-            store.add(ClipItem(kind: .text, text: "收藏的那条", tags: ["常用"]))
-            for index in 0..<5 {
+            for index in 0..<6 {
                 store.add(ClipItem(kind: .text, text: "普通 \(index)"))
             }
-            expect(store.items.contains(where: { $0.text == "收藏的那条" }),
-                   "the tagged clip survives trimming")
-            // limit 2 + the collected clip that the limit must not evict.
-            expect(store.items.count == 3,
-                   "trim keeps the limit plus the collected clip, got \(store.items.count)")
+            expect(store.savedItems(in: "常用").count == 1,
+                   "trim never evicts a saved copy")
+            expect(store.historyItems.count <= 2,
+                   "history is still capped at the limit, got \(store.historyItems.count)")
+        }
+
+        // ---- Renaming and deleting a folder ---------------------------------
+        do {
+            let scratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("pastenext-selftest-folderops-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let store = HistoryStore(directory: scratch, load: false)
+            let item = ClipItem(kind: .text, text: "归档内容")
+            store.add(item)
+            store.archive(store.items[0], to: "旧名")
+
+            store.renameFolder("旧名", to: "新名")
+            expect(store.savedItems(in: "新名").count == 1, "rename carries the copies")
+            expect(store.savedItems(in: "旧名").isEmpty, "the old folder is empty")
+
+            store.deleteFolder("新名")
+            expect(store.savedItems(in: "新名").isEmpty, "delete folder removes its copies")
         }
 
         // ---- Multi-file clips keep their names and folder apart -------------

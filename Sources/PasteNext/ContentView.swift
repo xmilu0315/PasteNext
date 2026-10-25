@@ -15,7 +15,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             searchHeader
-            tagBar
+            folderBar
             Divider().opacity(0.55)
             clipList
             footer
@@ -46,14 +46,14 @@ struct ContentView: View {
             Button(L("取消", "Cancel"), role: .cancel) { state.pendingDeletion = nil }
             Button(L("仍要删除", "Delete Anyway"), role: .destructive) { state.confirmPendingDeletion() }
         } message: {
-            Text(L("选中的卡片里有 \(state.pendingCollectedCount) 条已常驻或归入标签，删除后会从所有页签一并移除。",
-                   "\(state.pendingCollectedCount) of the selected clips are pinned or filed under a tag; deleting removes them everywhere."))
+            Text(L("选中的卡片里有 \(state.pendingCollectedCount) 条已常驻。删除后会从历史中移除（文件夹里的存档副本不受影响）。",
+                   "\(state.pendingCollectedCount) of the selected clips are pinned. Deleting removes them from history; copies saved in folders are unaffected."))
         }
         .sheet(item: $state.previewItem) { item in PreviewView(item: item, state: state) }
         .sheet(item: $state.editingItem) { item in EditClipView(item: item, state: state) }
-        .sheet(item: $state.tagEditorItem) { item in TagEditorView(item: item, state: state) }
-        .sheet(isPresented: $state.showingNewTag) { NewTagView(state: state) }
-        .sheet(isPresented: $state.showingRenameTag) { RenameTagView(state: state) }
+        .sheet(item: $state.folderEditorItem) { item in FolderPickerView(item: item, state: state) }
+        .sheet(isPresented: $state.showingNewFolder) { NewFolderView(state: state) }
+        .sheet(isPresented: $state.showingRenameFolder) { RenameFolderView(state: state) }
         .onReceive(NotificationCenter.default.publisher(for: .hidePasteNextPanel)) { _ in
             NSApp.keyWindow?.orderOut(nil)
         }
@@ -107,7 +107,7 @@ struct ContentView: View {
             state.selectionAnchor = nil
             state.selectedID = state.filteredItems.first?.id
         }
-        .onChange(of: state.selectedTag) { _ in
+        .onChange(of: state.selectedFolder) { _ in
             state.selectedIDs = []
             state.selectionAnchor = nil
             state.selectedID = state.filteredItems.first?.id
@@ -138,22 +138,23 @@ struct ContentView: View {
         .padding(.horizontal, 13).frame(height: 44)
     }
 
-    private var tagBar: some View {
+    private var folderBar: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 5) {
                     ForEach(Array(state.tabOrder.enumerated()), id: \.offset) { index, key in
-                        if state.tagName(for: key) != nil, index > 0, state.tagName(for: state.tabOrder[index - 1]) == nil {
+                        if state.folderName(for: key) != nil, index > 0,
+                           state.folderName(for: state.tabOrder[index - 1]) == nil {
                             Divider()
                                 .frame(height: 15)
                                 .padding(.horizontal, 2)
                         }
                         tabChip(key)
                     }
-                    Button { state.showingNewTag = true } label: {
+                    Button { state.showingNewFolder = true } label: {
                         Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
                             .frame(width: 22, height: 22).background(Color.primary.opacity(0.06)).clipShape(Circle())
-                    }.buttonStyle(.plain).help(L("新建标签", "New tag"))
+                    }.buttonStyle(.plain).help(L("新建文件夹", "New folder"))
                 }
                 .padding(.horizontal, 11).padding(.bottom, 9)
             }
@@ -181,7 +182,9 @@ struct ContentView: View {
             return tabItemProvider(key)
         }
         .onDrop(of: [UTType.utf8PlainText, UTType.pasteNextTab, UTType.pasteNextCard], delegate: TabDropDelegate(targetKey: key, state: state))
-        .help(state.tagName(for: key).map { L("拖入卡片可加入 #\($0)；拖动标签可排序", "Drop a clip here to add #\($0); drag tabs to reorder") } ?? L("拖动标签可调整顺序", "Drag to reorder"))
+        .help(state.folderName(for: key).map {
+            L("拖入卡片可归档到「\($0)」；拖动可排序", "Drop a clip here to save it into \($0); drag to reorder")
+        } ?? L("拖动可调整顺序", "Drag to reorder"))
         .modifier(TabContextMenu(key: key, state: state))
         .id(key)
     }
@@ -208,8 +211,8 @@ struct ContentView: View {
                     .font(.system(size: 29, weight: .light)).foregroundColor(.secondary.opacity(0.55))
                 Text(state.search.isEmpty ? L("复制点什么，历史会出现在这里", "Copy something and it appears here") : L("没有匹配的内容", "No matching clips"))
                     .font(.system(size: 12, weight: .medium)).foregroundColor(.secondary)
-                if state.selectedTag != nil {
-                    Button(L("清除标签筛选", "Clear tag filter")) { state.selectedTag = nil }
+                if state.selectedFolder != nil {
+                    Button(L("返回全部", "Back to All")) { state.selectTab("all") }
                         .buttonStyle(.link).font(.caption)
                 }
                 Spacer()
@@ -252,7 +255,7 @@ struct ContentView: View {
             Text("↵ \(L("粘贴", "Paste"))")
                 .font(.system(size: 10)).foregroundColor(.secondary.opacity(0.8))
             footerSeparator
-            Text("⌘←→ \(L("标签", "Tabs"))")
+            Text("⌘←→ \(L("切换", "Switch"))")
                 .font(.system(size: 10)).foregroundColor(.secondary.opacity(0.8))
         }
         .padding(.horizontal, 13).frame(height: 29)
@@ -285,7 +288,7 @@ struct ContentView: View {
             Button("") { state.togglePin(ids: Array(state.selectedIDs)) }.keyboardShortcut("p", modifiers: [.command])
             Button("") { state.moveSelectedItems(-1) }.keyboardShortcut(.upArrow, modifiers: [.command])
             Button("") { state.moveSelectedItems(1) }.keyboardShortcut(.downArrow, modifiers: [.command])
-            Button("") { state.search = ""; state.category = .all; state.selectedTag = nil; state.selectedID = state.store.items.first?.id }
+            Button("") { state.search = ""; state.category = .all; state.selectedFolder = nil; state.selectedID = state.store.items.first?.id }
                 .keyboardShortcut("r", modifiers: [.command])
             Button("") { NSApp.keyWindow?.orderOut(nil) }.keyboardShortcut("w", modifiers: [.command])
         }.frame(width: 0, height: 0).opacity(0)
@@ -306,7 +309,8 @@ struct ContentView: View {
             }
             .onDrop(of: [UTType.utf8PlainText, UTType.pasteNextCard], delegate: CardDropDelegate(targetID: item.id, state: state))
             .contextMenu { contextMenu(item) }
-            .help(L("拖动可排序；拖到自定义标签可归类；也可直接拖进 Word 等应用", "Drag to reorder, drop on a custom tag, or drag into Word and other apps"))
+            .help(L("拖动可排序；拖到文件夹标签可归档；也可直接拖进 Word 等应用",
+                    "Drag to reorder, drop on a folder tab to save a copy, or drag into Word and other apps"))
     }
 
     @ViewBuilder private func contextMenu(_ item: ClipItem) -> some View {
@@ -322,28 +326,26 @@ struct ContentView: View {
         Button { state.togglePin(ids: targets) } label: {
             Label(pinTitle(for: targets), systemImage: pinSymbol(for: targets))
         }
-        if !state.allTags.isEmpty {
-            Menu(L("移动到标签", "Move to Tag")) {
-                ForEach(state.allTags, id: \.self) { tag in
-                    Button {
-                        state.addTagToSelection(tag, ids: targets)
-                    } label: {
-                        Label(tag, systemImage: "tag")
-                    }
-                }
-                if !state.allTags.isEmpty {
-                    Divider()
-                    ForEach(state.allTags, id: \.self) { tag in
-                        Button {
-                            state.removeTagFromSelection(tag, ids: targets)
-                        } label: {
-                            Label(L("从 #\(tag) 移除", "Remove from #\(tag)"), systemImage: "tag.slash")
+        if item.isSaved {
+            // A saved copy can only be removed from its folder — that IS the
+            // manual deletion the user asked for.
+            Button { state.removeFromFolder(ids: targets) } label: {
+                Label(L("从文件夹移除", "Remove from Folder"), systemImage: "folder.badge.minus")
+            }
+        } else {
+            if !state.allFolders.isEmpty {
+                Menu(L("归档到文件夹", "Save to Folder")) {
+                    ForEach(state.allFolders, id: \.self) { folder in
+                        Button { state.archive(ids: targets, to: folder) } label: {
+                            Label(folder, systemImage: "folder")
                         }
                     }
                 }
             }
+            Button { state.folderEditorItem = item } label: {
+                Label(L("归档到文件夹…", "Save to Folder…"), systemImage: "folder.badge.plus")
+            }
         }
-        Button { state.tagEditorItem = item } label: { Label(L("管理标签…", "Manage Tags…"), systemImage: "tag") }
         Button { state.previewItem = item } label: { Label(L("预览", "Preview"), systemImage: "eye") }
         if item.kind != .image { Button { state.editingItem = item } label: { Label(L("编辑文本", "Edit Text"), systemImage: "pencil") } }
         Divider()
@@ -384,14 +386,14 @@ struct TabContextMenu: ViewModifier {
 
     func body(content: Content) -> some View {
         Group {
-            if let tag = state.tagName(for: key) {
+            if let folder = state.folderName(for: key) {
                 content.contextMenu {
                     Button {
-                        state.renameSourceTag = tag
-                        state.showingRenameTag = true
-                    } label: { Label(L("重命名标签…", "Rename Tag…"), systemImage: "pencil") }
-                    Button(role: .destructive) { state.deleteTag(tag) } label: {
-                        Label(L("删除标签", "Delete Tag"), systemImage: "trash")
+                        state.renameSourceFolder = folder
+                        state.showingRenameFolder = true
+                    } label: { Label(L("重命名文件夹…", "Rename Folder…"), systemImage: "pencil") }
+                    Button(role: .destructive) { state.deleteFolder(folder) } label: {
+                        Label(L("删除文件夹及其内容", "Delete Folder and Contents"), systemImage: "trash")
                     }
                 }
             } else {

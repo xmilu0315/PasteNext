@@ -15,17 +15,25 @@ final class AppState: ObservableObject {
     @Published var pendingDeletion: [ClipItem.ID]?
     @Published var search = ""
     @Published var category: ClipCategory = .all
-    @Published var selectedTag: String?
+    /// The folder currently open, or nil when a built-in tab (全部/常驻/今天) is.
+    @Published var selectedFolder: String?
     @Published var previewItem: ClipItem?
     @Published var editingItem: ClipItem?
-    @Published var tagEditorItem: ClipItem?
-    @Published var showingNewTag = false
-    @Published var showingRenameTag = false
-    @Published var renameSourceTag = ""
+    @Published var folderEditorItem: ClipItem?
+    @Published var showingNewFolder = false
+    @Published var showingRenameFolder = false
+    @Published var renameSourceFolder = ""
     @Published var captureCount = 0
     @Published var scrollGeneration = 0
     @Published var statusMessage = ""
-    @Published var customTags: [String] = UserDefaults.standard.stringArray(forKey: "customTags") ?? []
+    /// Folder list. Migrated once from the old "customTags" key.
+    @Published var folders: [String] = {
+        let defaults = UserDefaults.standard
+        if let saved = defaults.stringArray(forKey: "folders") { return saved }
+        let legacy = defaults.stringArray(forKey: "customTags") ?? []
+        if !legacy.isEmpty { defaults.set(legacy, forKey: "folders") }
+        return legacy
+    }()
     @Published var tabOrder: [String] = UserDefaults.standard.stringArray(forKey: "tabOrder") ?? []
     var previousApp: NSRunningApplication?
     var draggingCardID: ClipItem.ID?
@@ -89,11 +97,23 @@ final class AppState: ObservableObject {
         monitor.start()
     }
 
+    /// What the list shows: a folder's saved copies, or the rolling history.
+    ///
+    /// The two spaces never mix — a saved copy is not a history entry, and the
+    /// history is not filtered by folder.
     var filteredItems: [ClipItem] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return store.items.filter { item in
-            let tagMatches = selectedTag.map { item.itemTags.contains($0) } ?? true
-            return category.contains(item) && tagMatches && (query.isEmpty || item.text.lowercased().contains(query) || item.displayTitle.lowercased().contains(query) || (item.sourceName?.lowercased().contains(query) ?? false))
+        let base: [ClipItem]
+        if let selectedFolder {
+            base = store.savedItems(in: selectedFolder)
+        } else {
+            base = store.historyItems.filter { category.contains($0) }
+        }
+        return base.filter { item in
+            query.isEmpty
+                || item.text.lowercased().contains(query)
+                || item.displayTitle.lowercased().contains(query)
+                || (item.sourceName?.lowercased().contains(query) ?? false)
         }.sorted { lhs, rhs in
             if lhs.isPinned != rhs.isPinned { return lhs.isPinned }
             if lhs.effectiveSortIndex != rhs.effectiveSortIndex { return lhs.effectiveSortIndex > rhs.effectiveSortIndex }
@@ -108,7 +128,7 @@ final class AppState: ObservableObject {
     /// clip — even when pinned cards sort above it in the list. Keeping the
     /// previous selection here used to leave the highlight on a stale card.
     func reloadSelection() {
-        if let latest = store.items.first, filteredItems.contains(where: { $0.id == latest.id }) {
+        if let latest = store.historyItems.first, filteredItems.contains(where: { $0.id == latest.id }) {
             selectedID = latest.id
         } else {
             selectedID = filteredItems.first?.id
@@ -155,6 +175,12 @@ final class AppState: ObservableObject {
     /// asks first: that clip lives in the user's archive, and removing it from
     /// the main list also removes it from its tag.
     func delete(ids: [ClipItem.ID]) {
+        // Inside a folder, deleting IS the manual removal of a saved copy —
+        // nothing else can remove it, so asking again would be noise.
+        guard selectedFolder == nil else {
+            performDelete(ids: ids)
+            return
+        }
         let split = Self.splitDeletion(ids: ids, items: store.items)
         guard split.collected.isEmpty else {
             pendingDeletion = ids
@@ -225,30 +251,7 @@ final class AppState: ObservableObject {
         objectWillChange.send()
     }
 
-    func addTagToSelection(_ tag: String, ids: [ClipItem.ID]? = nil) {
-        let targetIDs = ids ?? Array(selectedIDs)
-        guard !targetIDs.isEmpty else { return }
-        for item in store.items.filter({ targetIDs.contains($0.id) }) where !item.itemTags.contains(tag) {
-            var updated = item
-            updated.tags = (item.itemTags + [tag]).sorted()
-            store.update(updated)
-        }
-        normalizeTabs()
-        objectWillChange.send()
-    }
 
-    func removeTagFromSelection(_ tag: String, ids: [ClipItem.ID]? = nil) {
-        let targetIDs = ids ?? Array(selectedIDs)
-        guard !targetIDs.isEmpty else { return }
-        for item in store.items.filter({ targetIDs.contains($0.id) }) where item.itemTags.contains(tag) {
-            var updated = item
-            let remaining = item.itemTags.filter { $0 != tag }
-            // Keep "no tags" as nil, the same shape addTag/deleteTag produce.
-            updated.tags = remaining.isEmpty ? nil : remaining
-            store.update(updated)
-        }
-        objectWillChange.send()
-    }
 
     func moveSelectedItems(_ offset: Int) {
         let list = filteredItems
@@ -326,23 +329,31 @@ final class AppState: ObservableObject {
     }
 
 
-    func addTag(_ name: String) {
+    // MARK: - Folders
+
+    /// Creates a folder (if needed) and opens it.
+    func addFolder(_ name: String) {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
-        if !customTags.contains(clean) {
-            customTags.append(clean)
-            UserDefaults.standard.set(customTags, forKey: "customTags")
+        if !folders.contains(clean) {
+            folders.append(clean)
+            UserDefaults.standard.set(folders, forKey: "folders")
         }
         normalizeTabs()
-        selectedTag = clean
+        selectedFolder = clean
         category = .all
+        reloadSelection()
     }
-    var allTags: [String] {
-        Array(Set(customTags + store.items.flatMap(\.itemTags))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+
+    /// Declared folders plus folders that only exist because a clip was filed
+    /// into them (e.g. restored from an older build).
+    var allFolders: [String] {
+        Array(Set(folders + store.foldersInUse))
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     var activeTabKey: String {
-        if let selectedTag { return "tag:\(selectedTag)" }
+        if let selectedFolder { return "folder:\(selectedFolder)" }
         switch category {
         case .pinned: return "pinned"
         case .today: return "today"
@@ -355,19 +366,22 @@ final class AppState: ObservableObject {
         case "all": return L("全部", "All")
         case "pinned": return L("常驻", "Pinned")
         case "today": return L("今天", "Today")
-        default: return "#" + String(key.dropFirst(4))
+        default: return String(key.dropFirst(7))
         }
     }
+
     func tabIcon(_ key: String) -> String? {
         switch key {
         case "all": return nil
         case "pinned": return "pin.fill"
         case "today": return nil
-        default: return nil
+        default: return "folder.fill"
         }
     }
-    func tagName(for key: String) -> String? {
-        key.hasPrefix("tag:") ? String(key.dropFirst(4)) : nil
+
+    /// The folder a tab key refers to, if any.
+    func folderName(for key: String) -> String? {
+        key.hasPrefix("folder:") ? String(key.dropFirst(7)) : nil
     }
 
     func setPollInterval(_ value: Double) {
@@ -387,13 +401,19 @@ final class AppState: ObservableObject {
     }
 
     func selectTab(_ key: String) {
-        if let tag = tagName(for: key) { selectedTag = tag; category = .all; return }
-        selectedTag = nil
+        if let folder = folderName(for: key) {
+            selectedFolder = folder
+            category = .all
+            reloadSelection()
+            return
+        }
+        selectedFolder = nil
         switch key {
         case "pinned": category = .pinned
         case "today": category = .today
         default: category = .all
         }
+        reloadSelection()
     }
 
     func stepTab(_ offset: Int) {
@@ -417,52 +437,86 @@ final class AppState: ObservableObject {
         UserDefaults.standard.set(next, forKey: "tabOrder")
     }
 
-    func ensureTagTab(_ tag: String) {
-        if !customTags.contains(tag) {
-            customTags.append(tag)
-            UserDefaults.standard.set(customTags, forKey: "customTags")
+    func ensureFolderTab(_ folder: String) {
+        if !folders.contains(folder) {
+            folders.append(folder)
+            UserDefaults.standard.set(folders, forKey: "folders")
         }
         normalizeTabs()
     }
 
-    func renameTag(_ oldName: String, to newRawName: String) {
+    func renameFolder(_ oldName: String, to newRawName: String) {
         let newName = newRawName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !newName.isEmpty, newName != oldName, !customTags.contains(newName),
-              let index = customTags.firstIndex(of: oldName) else { return }
-        customTags[index] = newName
-        UserDefaults.standard.set(customTags, forKey: "customTags")
-        tabOrder = tabOrder.map { $0 == "tag:\(oldName)" ? "tag:\(newName)" : $0 }
+        guard !newName.isEmpty, newName != oldName, !folders.contains(newName),
+              let index = folders.firstIndex(of: oldName) else { return }
+        folders[index] = newName
+        UserDefaults.standard.set(folders, forKey: "folders")
+        tabOrder = tabOrder.map { $0 == "folder:\(oldName)" ? "folder:\(newName)" : $0 }
         UserDefaults.standard.set(tabOrder, forKey: "tabOrder")
-        for item in store.items where item.itemTags.contains(oldName) {
-            var updated = item
-            updated.tags = item.itemTags.map { $0 == oldName ? newName : $0 }.sorted()
-            store.update(updated)
-        }
-        if selectedTag == oldName { selectedTag = newName }
+        store.renameFolder(oldName, to: newName)
+        if selectedFolder == oldName { selectedFolder = newName }
         normalizeTabs()
     }
 
-    func deleteTag(_ name: String) {
-        customTags.removeAll { $0 == name }
-        UserDefaults.standard.set(customTags, forKey: "customTags")
-        tabOrder.removeAll { $0 == "tag:\(name)" }
+    /// Deletes a folder together with everything archived in it.
+    func deleteFolder(_ name: String) {
+        folders.removeAll { $0 == name }
+        UserDefaults.standard.set(folders, forKey: "folders")
+        tabOrder.removeAll { $0 == "folder:\(name)" }
         UserDefaults.standard.set(tabOrder, forKey: "tabOrder")
-        for item in store.items where item.itemTags.contains(name) {
-            var updated = item
-            let tags = item.itemTags.filter { $0 != name }
-            updated.tags = tags.isEmpty ? nil : tags
-            store.update(updated)
-        }
-        if selectedTag == name { selectedTag = nil; category = .all }
+        store.deleteFolder(name)
+        if selectedFolder == name { selectedFolder = nil; category = .all }
         normalizeTabs()
+        reloadSelection()
     }
 
-    func addTag(_ tag: String, to itemID: ClipItem.ID) {
-        guard let item = store.items.first(where: { $0.id == itemID }), !item.itemTags.contains(tag) else { return }
-        var updated = item
-        updated.tags = (item.itemTags + [tag]).sorted()
-        store.update(updated)
-        normalizeTabs()
+    /// Archives the given clips into a folder — copies, so the history originals
+    /// stay untouched and the copies survive anything that happens to them.
+    @discardableResult
+    func archive(ids: [ClipItem.ID], to folder: String) -> Int {
+        var archived = 0
+        for item in store.items where ids.contains(item.id) && !item.isSaved {
+            let html = store.fragment(named: item.htmlFilename)
+            if store.archive(item, to: folder, image: nil, htmlData: html) { archived += 1 }
+        }
+        ensureFolderTab(folder)
+        if archived > 0 {
+            statusMessage = L("已归档 \(archived) 条到「\(folder)」", "Saved \(archived) to \(folder)")
+        } else {
+            statusMessage = L("「\(folder)」里已有相同内容", "Already saved in \(folder)")
+        }
+        return archived
+    }
+
+    /// Archives one clip (used by drag-and-drop onto a folder tab).
+    @discardableResult
+    func archive(_ item: ClipItem, to folder: String) -> Bool {
+        let html = store.fragment(named: item.htmlFilename)
+        let done = store.archive(item, to: folder, image: nil, htmlData: html)
+        ensureFolderTab(folder)
+        statusMessage = done
+            ? L("已归档到「\(folder)」", "Saved to \(folder)")
+            : L("「\(folder)」里已有相同内容", "Already saved in \(folder)")
+        return done
+    }
+
+    /// Removes a clip from the folder it was archived into.
+    func removeFromFolder(ids: [ClipItem.ID]) {
+        performDelete(ids: ids)
+    }
+
+    private func normalizeTabs() {
+        var next = tabOrder.filter { Self.builtinTabs.contains($0) || folderName(for: $0) != nil }
+        for key in Self.builtinTabs where !next.contains(key) {
+            if key == "all" { next.insert(key, at: 0) } else { next.append(key) }
+        }
+        for folder in allFolders where !next.contains("folder:\(folder)") {
+            next.append("folder:\(folder)")
+        }
+        if next != tabOrder {
+            tabOrder = next
+            UserDefaults.standard.set(next, forKey: "tabOrder")
+        }
     }
 
     func moveCard(_ itemID: ClipItem.ID, before targetID: ClipItem.ID) {
@@ -481,26 +535,6 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func normalizeTabs() {
-        var next = tabOrder.filter { Self.builtinTabs.contains($0) || tagName(for: $0) != nil }
-        for key in Self.builtinTabs where !next.contains(key) {
-            if key == "all" { next.insert(key, at: 0) } else { next.append(key) }
-        }
-        for tag in customTags where !next.contains("tag:\(tag)") { next.append("tag:\(tag)") }
-        for tag in allTags where !next.contains("tag:\(tag)") { next.append("tag:\(tag)") }
-        if next != tabOrder {
-            tabOrder = next
-            UserDefaults.standard.set(next, forKey: "tabOrder")
-        }
-    }
-    func setTags(_ tags: [String], for item: ClipItem) {
-        var updated = item
-        updated.tags = Array(Set(tags)).sorted()
-        store.update(updated)
-        if let index = store.items.firstIndex(where: { $0.id == item.id }) {
-            tagEditorItem = store.items[index]
-        }
-    }
     func delete(_ item: ClipItem) {
         store.delete(item)
         selectedID = filteredItems.first?.id

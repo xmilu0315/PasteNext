@@ -73,8 +73,11 @@ struct TabDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        if let cardID = state.draggingCardID, let tag = state.tagName(for: targetKey) {
-            state.addTag(tag, to: cardID)
+        // Dropping a card on a folder tab archives a copy into it.
+        if let cardID = state.draggingCardID,
+           let folder = state.folderName(for: targetKey),
+           let item = state.store.items.first(where: { $0.id == cardID }) {
+            state.archive(item, to: folder)
             state.selectTab(targetKey)
             state.draggingCardID = nil
             return true

@@ -117,7 +117,9 @@ final class HistoryStore: ObservableObject {
 
     func add(_ item: ClipItem, image: NSImage? = nil, htmlData: Data? = nil) {
         var new = item
-        if let existing = items.firstIndex(where: { isSameClip($0, item) }) {
+        // Only history entries take part in de-duplication: a saved copy is a
+        // separate record and must never be replaced by a new capture.
+        if let existing = items.firstIndex(where: { !$0.isSaved && isSameClip($0, item) }) {
             // The same content is already in the history. Keep the card's
             // identity and everything the user set on it, but treat this as a
             // fresh copy — see the sort index below.
@@ -126,7 +128,6 @@ final class HistoryStore: ObservableObject {
             new.isPinned = old.isPinned
             new.title = old.title
             new.imageFilename = old.imageFilename
-            new.tags = old.tags
         }
         // A new copy always lands on top. Re-copying something already in the
         // list used to refresh only its timestamp, which left the card stranded
@@ -141,6 +142,89 @@ final class HistoryStore: ObservableObject {
         }
         items.insert(new, at: 0)
         trim()
+        scheduleSave()
+    }
+
+    // MARK: - History vs. folders
+
+    /// Everything in the rolling history (pinned included, saved copies not).
+    var historyItems: [ClipItem] { items.filter { !$0.isSaved } }
+
+    /// Saved copies in one folder, newest first.
+    func savedItems(in folder: String) -> [ClipItem] {
+        items.filter { $0.folder == folder }
+    }
+
+    /// Folders that currently hold at least one clip.
+    var foldersInUse: [String] {
+        Array(Set(items.compactMap(\.folder))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// Archives an independent copy of `item` into `folder`.
+    ///
+    /// This is a *copy*, not a tag: the copy gets its own id and its own image
+    /// and HTML files, so deleting the original from history (or clearing the
+    /// history outright) cannot touch it. Returns false when the folder already
+    /// holds the same content.
+    @discardableResult
+    func archive(_ item: ClipItem, to folder: String, image: NSImage? = nil, htmlData: Data? = nil) -> Bool {
+        guard !items.contains(where: { $0.folder == folder && isSameClip($0, item) }) else { return false }
+
+        var copy = item
+        copy.id = UUID()
+        copy.folder = folder
+        copy.isPinned = false          // pinning is a history concept
+        copy.filePaths = item.filePaths
+        copy.htmlFilename = nil
+        copy.imageFilename = nil
+
+        // Own copies of the sidecar files.
+        if let name = item.imageFilename,
+           let data = try? Data(contentsOf: imagesDirectory.appendingPathComponent(name)) {
+            let ext = (name as NSString).pathExtension
+            let copy1 = "\(copy.id.uuidString).\(ext.isEmpty ? "png" : ext)"
+            try? data.write(to: imagesDirectory.appendingPathComponent(copy1), options: .atomic)
+            copy.imageFilename = copy1
+        }
+        if let htmlData {
+            copy.htmlFilename = saveFragment(data: htmlData, id: copy.id)
+        } else if let name = item.htmlFilename,
+                  let data = try? Data(contentsOf: fragmentsDirectory.appendingPathComponent(name)) {
+            let copy1 = "\(copy.id.uuidString).html"
+            try? data.write(to: fragmentsDirectory.appendingPathComponent(copy1), options: .atomic)
+            copy.htmlFilename = copy1
+        }
+        // A picture handed over at archive time (e.g. a freshly captured one).
+        if let image, copy.imageFilename == nil {
+            copy.imageFilename = saveImage(image, id: copy.id)
+        }
+
+        let highest = items.filter { $0.folder == folder }.compactMap(\.sortIndex).max()
+            ?? Date().timeIntervalSinceReferenceDate
+        copy.sortIndex = highest + 1
+        // Saved copies sit at the end of `items`: index 0 stays "newest capture".
+        items.append(copy)
+        scheduleSave()
+        Diagnostics.log("store.archived", ["folder": folder, "kind": copy.kind.rawValue])
+        return true
+    }
+
+    /// Renames a folder and moves its saved copies with it.
+    func renameFolder(_ old: String, to new: String) {
+        guard old != new else { return }
+        for index in items.indices where items[index].folder == old {
+            items[index].folder = new
+        }
+        scheduleSave()
+    }
+
+    /// Removes a folder and everything archived in it.
+    func deleteFolder(_ name: String) {
+        let doomed = items.filter { $0.folder == name }
+        for item in doomed {
+            removeFiles(for: item)
+        }
+        items.removeAll { $0.folder == name }
         scheduleSave()
     }
 
@@ -207,15 +291,18 @@ final class HistoryStore: ObservableObject {
 
     func delete(_ item: ClipItem) {
         items.removeAll { $0.id == item.id }
+        removeFiles(for: item)
+        scheduleSave()
+    }
+
+    /// Deletes the sidecar files a clip owns, unless another clip still uses them.
+    private func removeFiles(for item: ClipItem) {
         if let name = item.imageFilename, !items.contains(where: { $0.imageFilename == name }) {
             try? FileManager.default.removeItem(at: imagesDirectory.appendingPathComponent(name))
         }
-        // The archived HTML payload is a sidecar file; without this it would
-        // linger in Fragments/ long after its clip is gone.
-        if let name = item.htmlFilename {
+        if let name = item.htmlFilename, !items.contains(where: { $0.htmlFilename == name }) {
             try? FileManager.default.removeItem(at: fragmentsDirectory.appendingPathComponent(name))
         }
-        scheduleSave()
     }
 
     func reorder(_ ordered: [ClipItem]) {
@@ -236,14 +323,7 @@ final class HistoryStore: ObservableObject {
     func clearHistory() -> (removed: Int, kept: Int) {
         let removed = items.filter { !$0.isArchived }
         items.removeAll { !$0.isArchived }
-        for item in removed {
-            if let name = item.imageFilename, !items.contains(where: { $0.imageFilename == name }) {
-                try? FileManager.default.removeItem(at: imagesDirectory.appendingPathComponent(name))
-            }
-            if let name = item.htmlFilename {
-                try? FileManager.default.removeItem(at: fragmentsDirectory.appendingPathComponent(name))
-            }
-        }
+        for item in removed { removeFiles(for: item) }
         scheduleSave()
         return (removed.count, items.count)
     }

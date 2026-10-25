@@ -40,7 +40,10 @@ struct ClipItem: Codable, Identifiable, Equatable {
     var isRemote = false
     var imageFilename: String?
     var filePaths: [String]?
-    var tags: [String]? = nil
+    /// The folder this clip was archived into, or nil for an ordinary history
+    /// entry. A non-nil folder means the clip is a *saved copy*: it owns its own
+    /// image and HTML files and lives outside the rolling history entirely.
+    var folder: String? = nil
     var sortIndex: Double? = nil
     /// Pixel size of the picture ("800×600").
     ///
@@ -55,13 +58,17 @@ struct ClipItem: Codable, Identifiable, Equatable {
     /// replay exactly what the source app put on the board.
     var htmlFilename: String? = nil
 
-    var itemTags: [String] { tags ?? [] }
+    /// Archived into a folder: a saved copy, not a history entry.
+    var isSaved: Bool { folder != nil }
 
     /// Explicit keys so the decoder below can be tolerant.
     enum CodingKeys: String, CodingKey {
         case id, kind, text, createdAt, isPinned, title, sourceBundleID, sourceName,
-             sourcePath, isRemote, imageFilename, filePaths, tags, sortIndex, imageSize,
+             sourcePath, isRemote, imageFilename, filePaths, folder, sortIndex, imageSize,
              textFirst, htmlFilename
+        /// Legacy key from when folders were called tags. Decoded only, so an
+        /// upgraded install keeps whatever the user had already filed away.
+        case tags
     }
 
     /// Tolerant decoding.
@@ -85,10 +92,39 @@ struct ClipItem: Codable, Identifiable, Equatable {
         sourcePath = try c.decodeIfPresent(String.self, forKey: .sourcePath)
         imageFilename = try c.decodeIfPresent(String.self, forKey: .imageFilename)
         filePaths = try c.decodeIfPresent([String].self, forKey: .filePaths)
-        tags = try c.decodeIfPresent([String].self, forKey: .tags)
+        folder = try c.decodeIfPresent(String.self, forKey: .folder)
+        if folder == nil,
+           let legacy = try c.decodeIfPresent([String].self, forKey: .tags),
+           let first = legacy.first {
+            // Everything filed under a tag becomes a saved copy in that folder.
+            folder = first
+        }
         sortIndex = try c.decodeIfPresent(Double.self, forKey: .sortIndex)
         imageSize = try c.decodeIfPresent(String.self, forKey: .imageSize)
         htmlFilename = try c.decodeIfPresent(String.self, forKey: .htmlFilename)
+    }
+
+    /// Explicit encoding: only current fields are written, so the legacy `tags`
+    /// key disappears the first time a clip is saved again.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(text, forKey: .text)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(isPinned, forKey: .isPinned)
+        try c.encode(isRemote, forKey: .isRemote)
+        try c.encode(textFirst, forKey: .textFirst)
+        try c.encodeIfPresent(title, forKey: .title)
+        try c.encodeIfPresent(sourceBundleID, forKey: .sourceBundleID)
+        try c.encodeIfPresent(sourceName, forKey: .sourceName)
+        try c.encodeIfPresent(sourcePath, forKey: .sourcePath)
+        try c.encodeIfPresent(imageFilename, forKey: .imageFilename)
+        try c.encodeIfPresent(filePaths, forKey: .filePaths)
+        try c.encodeIfPresent(folder, forKey: .folder)
+        try c.encodeIfPresent(sortIndex, forKey: .sortIndex)
+        try c.encodeIfPresent(imageSize, forKey: .imageSize)
+        try c.encodeIfPresent(htmlFilename, forKey: .htmlFilename)
     }
 
     /// Memberwise initialiser kept explicit because the custom decoder above
@@ -96,7 +132,7 @@ struct ClipItem: Codable, Identifiable, Equatable {
     init(id: UUID = UUID(), kind: ClipKind, text: String, createdAt: Date = Date(),
          isPinned: Bool = false, title: String? = nil, sourceBundleID: String? = nil,
          sourceName: String? = nil, sourcePath: String? = nil, isRemote: Bool = false,
-         imageFilename: String? = nil, filePaths: [String]? = nil, tags: [String]? = nil,
+         imageFilename: String? = nil, filePaths: [String]? = nil, folder: String? = nil,
          sortIndex: Double? = nil, imageSize: String? = nil, textFirst: Bool = false,
          htmlFilename: String? = nil) {
         self.id = id
@@ -111,19 +147,16 @@ struct ClipItem: Codable, Identifiable, Equatable {
         self.isRemote = isRemote
         self.imageFilename = imageFilename
         self.filePaths = filePaths
-        self.tags = tags
+        self.folder = folder
         self.sortIndex = sortIndex
         self.imageSize = imageSize
         self.textFirst = textFirst
         self.htmlFilename = htmlFilename
     }
     var effectiveSortIndex: Double { sortIndex ?? createdAt.timeIntervalSinceReferenceDate }
-    /// A collected clip: pinned, or filed under at least one custom tag.
-    ///
-    /// Collected clips are what the user has deliberately kept — they survive
-    /// "clear history", automatic trimming, and deleting from the main list
-    /// (which asks first), so a tag really is a place to archive something.
-    var isArchived: Bool { isPinned || !itemTags.isEmpty }
+    /// A clip the user deliberately kept: pinned, or archived into a folder.
+    /// Both survive "clear history" and automatic trimming.
+    var isArchived: Bool { isPinned || isSaved }
 
     /// File names carried by a file clip, in selection order.
     var fileNames: [String] {

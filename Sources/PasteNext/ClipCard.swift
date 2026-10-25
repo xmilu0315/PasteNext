@@ -24,11 +24,10 @@ struct ClipCard: View, Equatable {
                     Text(item.sourceName ?? L("未知来源", "Unknown source"))
                         .font(.system(size: compact ? 10 : 11, weight: .medium)).foregroundColor(.secondary).lineLimit(1)
                     Spacer()
-                    if !item.itemTags.isEmpty {
+                    if let folder = item.folder {
                         HStack(spacing: 2) {
-                            Image(systemName: "tag.fill").font(.system(size: 7))
-                            Text(item.itemTags.prefix(2).joined(separator: " "))
-                                .font(.system(size: 8, weight: .medium)).lineLimit(1)
+                            Image(systemName: "folder.fill").font(.system(size: 7))
+                            Text(folder).font(.system(size: 8, weight: .medium)).lineLimit(1)
                         }
                         .foregroundColor(.secondary.opacity(0.8))
                         .padding(.horizontal, 4).padding(.vertical, 1)
