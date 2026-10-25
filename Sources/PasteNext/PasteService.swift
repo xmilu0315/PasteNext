@@ -18,18 +18,15 @@ enum PasteService {
         var wrote = false
         if plainText {
             // "Paste as plain text": a file clip becomes its paths, everything
-            // else its text. No picture is written in this mode.
+            // else its text. No picture or markup is written in this mode.
             wrote = writeText(item.plainTextRepresentation, to: pb)
         } else {
-            // A clip can carry a picture, text and files at the same time. Write
-            // every part that is present so the target app receives the whole
-            // thing instead of only whichever part happened to define `kind`.
+            // A clip can carry a picture, text and files at once, so every part
+            // that is present gets written.
             if item.kind == .files, let paths = item.filePaths, !paths.isEmpty {
-                // A file that lives inside another app's container is only
-                // resolvable if THIS process can read it: the file URL we write
-                // carries our own access rights, not the original copier's. When
-                // Full Disk Access is missing, WeChat temp files and the like
-                // become dead URLs for every target app.
+                // A file inside another app's container is only resolvable if
+                // THIS process can read it: the file URL we write carries our
+                // own access rights, not the original copier's.
                 let unreadable = paths.filter { !FileManager.default.isReadableFile(atPath: $0) }
                 if !unreadable.isEmpty && !Permissions.fullDiskAccess {
                     Diagnostics.log("paste.blocked", [
@@ -50,30 +47,24 @@ enum PasteService {
                 }
                 wrote = writeFiles(paths, to: pb)
             }
-            if let image {
-                if writeImage(image, to: pb) { wrote = true }
-                // Rich text is what lets a word processor receive text AND the
-                // picture in one paste. Without it the target just takes the
-                // image flavour and the words are lost.
-                if let caption = item.captionText {
-                    // Replaying the original HTML keeps the source's own order,
-                    // structure and formatting; the captured picture is inlined
-                    // because the markup only references it by URL.
-                    if let htmlFragment, let replayed = replayHTML(htmlFragment, image: image) {
-                        if pb.setString(replayed, forType: .html) { wrote = true }
-                        if let rtf = rtf(fromHTML: replayed), pb.setData(rtf, forType: .rtf) { wrote = true }
-                        else if writeRichText(text: caption, image: image,
-                                              textFirst: item.textFirst, to: pb) { wrote = true }
-                    } else if writeRichText(text: caption, image: image,
-                                           textFirst: item.textFirst, to: pb) {
-                        wrote = true
-                    }
-                }
-            }
-            // A plain file clip already put its name on the board as part of the
-            // file payload; adding a bare string would make some apps paste the
-            // name instead of the file.
+
+            if let image, writeImage(image, to: pb) { wrote = true }
+
+            // Rich text is what carries words and picture together. Replaying
+            // the archived HTML preserves the source's own order, structure and
+            // formatting (the picture is inlined, since the markup only holds a
+            // URL); without an archive it is synthesised from text + image.
             if let caption = item.captionText, item.kind != .files {
+                if let htmlFragment, let replayed = replayHTML(htmlFragment, image: image) {
+                    if pb.setString(replayed, forType: .html) { wrote = true }
+                    if let rtf = rtf(fromHTML: replayed), pb.setData(rtf, forType: .rtf) { wrote = true }
+                } else if let image,
+                          writeRichText(text: caption, image: image,
+                                        textFirst: item.textFirst, to: pb) {
+                    wrote = true
+                }
+                // Always offer the bare words as well: pasting into a text field
+                // or using ⇧↵ must still work.
                 if pb.setString(caption, forType: .string) { wrote = true }
             }
         }
@@ -82,9 +73,6 @@ enum PasteService {
         // clipboard: that is what made Finder play the "nothing to paste" sound
         // and wiped the file the user had just copied.
         if !wrote {
-            // A write that produced nothing must never leave the user with an
-            // empty clipboard: that is what made Finder play the "nothing to
-            // paste" sound and wiped the file the user had just copied.
             let fallback = item.plainTextRepresentation
             if !fallback.isEmpty { pb.setString(fallback, forType: .string) }
             Diagnostics.log("paste.fallback", ["reason": "nothing-written"])
@@ -179,9 +167,13 @@ enum PasteService {
 
     /// Rebuilds the archived HTML with the captured picture inlined, so the
     /// paste reproduces the source document instead of a reconstruction.
-    private static func replayHTML(_ data: Data, image: NSImage) -> String? {
-        guard var html = String(data: data, encoding: .utf8), !html.isEmpty,
-              let tiff = image.tiffRepresentation,
+    private static func replayHTML(_ data: Data, image: NSImage?) -> String? {
+        guard var html = String(data: data, encoding: .utf8), !html.isEmpty else { return nil }
+        guard let image else {
+            // A text-only clip: the markup is already self-contained.
+            return html
+        }
+        guard let tiff = image.tiffRepresentation,
               let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:]),
               png.count <= 8_000_000 else { return nil }

@@ -27,14 +27,20 @@ final class PasteNextPanel: NSPanel {
                 return
             }
         }
-        // ⌘1…⌘9 paste the n-th card. This lives in the panel's own event path,
-        // so it only fires while the PasteNext window is open and focused — it
-        // is deliberately NOT a global hotkey, because ⌘1…⌘9 belong to other apps.
-        if event.type == .keyDown,
-           let digit = Self.digitKeyCodes[event.keyCode],
-           event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command {
-            AppState.shared.pasteItem(at: digit - 1)
-            return
+        // ⌘1…⌘9 paste the n-th card verbatim; ⌘⇧1…⌘⇧9 paste it as plain text.
+        // This lives in the panel's own event path, so it only fires while the
+        // PasteNext window is open and focused — it is deliberately NOT a global
+        // hotkey, because ⌘1…⌘9 belong to other apps.
+        if event.type == .keyDown, let digit = Self.digitKeyCodes[event.keyCode] {
+            let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            if modifiers == .command {
+                AppState.shared.pasteItem(at: digit - 1)
+                return
+            }
+            if modifiers == [.command, .shift] {
+                AppState.shared.pasteItem(at: digit - 1, plainText: true)
+                return
+            }
         }
         super.sendEvent(event)
     }

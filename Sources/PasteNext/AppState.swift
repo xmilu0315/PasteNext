@@ -258,13 +258,14 @@ final class AppState: ObservableObject {
         return result
     }
 
-    /// Pastes the n-th most recent non-pinned card, for ⌘1…⌘9.
+    /// Pastes the n-th most recent non-pinned card, for ⌘1…⌘9 (verbatim) and
+    /// ⌘⇧1…⌘⇧9 (values only).
     /// The index follows what the user actually sees, so it also respects the
     /// active tab and the search filter.
-    func pasteItem(at index: Int) {
+    func pasteItem(at index: Int, plainText: Bool = false) {
         let items = filteredItems.filter { !$0.isPinned }
         guard index >= 0, index < items.count else { return }
-        paste(items[index])
+        paste(items[index], plainText: plainText)
     }
 
     func copyPath(_ item: ClipItem) {

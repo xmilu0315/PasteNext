@@ -645,6 +645,33 @@ enum SelfTest {
             expect(!out.contains("example.com"), "replay drops the dead remote URL")
         }
 
+        // ---- Styled text clips paste rich, and only rich when asked ---------
+        do {
+            let html = "<html><body><p><b>带样式的富文本</b></p></body></html>"
+            let clip = ClipItem(kind: .text, text: "带样式的富文本")
+
+            // Normal paste: the archived markup is replayed so formatting survives.
+            let rich = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.rich"))
+            PasteService.copy(clip, image: nil, monitor: ClipboardMonitor(pasteboard: rich),
+                              paste: false, pasteboard: rich,
+                              htmlFragment: html.data(using: .utf8))
+            expect(rich.string(forType: .html)?.contains("<b>") == true,
+                   "styled text clip replays its HTML")
+            expect(rich.data(forType: .rtf) != nil, "styled text clip also offers RTF")
+            expect(rich.string(forType: .string) == "带样式的富文本",
+                   "styled text clip still offers plain words")
+
+            // ⌘⇧N: values only.
+            let plain = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.plainonly"))
+            PasteService.copy(clip, image: nil, monitor: ClipboardMonitor(pasteboard: plain),
+                              paste: false, plainText: true, pasteboard: plain,
+                              htmlFragment: html.data(using: .utf8))
+            expect(plain.string(forType: .html) == nil, "plain-text mode writes no HTML")
+            expect(plain.data(forType: .rtf) == nil, "plain-text mode writes no RTF")
+            expect(plain.string(forType: .string) == "带样式的富文本",
+                   "plain-text mode still writes the words")
+        }
+
         // ---- The paste side ------------------------------------------------
         // An image+text clip must put BOTH on the board, so a rich-text target
         // (a WeChat input box, for instance) receives the picture and the words.
