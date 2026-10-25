@@ -118,6 +118,13 @@ struct ClipItem: Codable, Identifiable, Equatable {
         self.htmlFilename = htmlFilename
     }
     var effectiveSortIndex: Double { sortIndex ?? createdAt.timeIntervalSinceReferenceDate }
+    /// A collected clip: pinned, or filed under at least one custom tag.
+    ///
+    /// Collected clips are what the user has deliberately kept — they survive
+    /// "clear history", automatic trimming, and deleting from the main list
+    /// (which asks first), so a tag really is a place to archive something.
+    var isArchived: Bool { isPinned || !itemTags.isEmpty }
+
     /// File names carried by a file clip, in selection order.
     var fileNames: [String] {
         (filePaths ?? []).map { ($0 as NSString).lastPathComponent }

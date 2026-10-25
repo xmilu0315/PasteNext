@@ -33,10 +33,13 @@ struct SettingsView: View {
         .onChange(of: historyLimit) { state.store.limit = max(50, $0) }
         .onChange(of: pollInterval) { state.setPollInterval($0) }
         .onChange(of: language) { _ in state.objectWillChange.send() }
-        .alert(L("清空未置顶历史？", "Clear unpinned history?"), isPresented: $model.showClearConfirm) {
+        .alert(L("清空历史？", "Clear history?"), isPresented: $model.showClearConfirm) {
             Button(L("取消", "Cancel"), role: .cancel) {}
-            Button(L("清空", "Clear"), role: .destructive) { state.store.clearUnpinned() }
-        } message: { Text(L("此操作不可撤销，置顶内容会保留。", "This cannot be undone. Pinned clips will be kept.")) }
+            Button(L("清空", "Clear"), role: .destructive) { state.clearHistory() }
+        } message: {
+            Text(L("此操作不可撤销。常驻卡片与已归入标签的收藏卡片会全部保留。",
+                   "This cannot be undone. Pinned clips and clips filed under a tag are kept."))
+        }
         .alert(L("设置未生效", "Setting could not be changed"), isPresented: .constant(!model.errorMessage.isEmpty)) {
             Button(L("好", "OK")) { model.errorMessage = "" }
         } message: { Text(model.errorMessage) }

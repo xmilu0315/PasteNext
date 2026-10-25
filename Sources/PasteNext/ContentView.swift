@@ -37,6 +37,18 @@ struct ContentView: View {
             }
         }
         .background(keyboardCommands)
+        // Removing a collected clip also removes it from its tag, so it must be
+        // an explicit choice rather than a side effect of deleting in the list.
+        .alert(L("其中含有收藏的卡片", "Some of these clips are saved"),
+               isPresented: Binding(
+                    get: { state.pendingDeletion != nil },
+                    set: { if !$0 { state.pendingDeletion = nil } })) {
+            Button(L("取消", "Cancel"), role: .cancel) { state.pendingDeletion = nil }
+            Button(L("仍要删除", "Delete Anyway"), role: .destructive) { state.confirmPendingDeletion() }
+        } message: {
+            Text(L("选中的卡片里有 \(state.pendingCollectedCount) 条已常驻或归入标签，删除后会从所有页签一并移除。",
+                   "\(state.pendingCollectedCount) of the selected clips are pinned or filed under a tag; deleting removes them everywhere."))
+        }
         .sheet(item: $state.previewItem) { item in PreviewView(item: item, state: state) }
         .sheet(item: $state.editingItem) { item in EditClipView(item: item, state: state) }
         .sheet(item: $state.tagEditorItem) { item in TagEditorView(item: item, state: state) }

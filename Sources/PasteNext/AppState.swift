@@ -11,6 +11,8 @@ final class AppState: ObservableObject {
     let monitor = ClipboardMonitor()
     @Published var selectedID: ClipItem.ID?
     @Published var selectedIDs: Set<ClipItem.ID> = []
+    /// Set when a deletion needs confirmation because it touches collected clips.
+    @Published var pendingDeletion: [ClipItem.ID]?
     @Published var search = ""
     @Published var category: ClipCategory = .all
     @Published var selectedTag: String?
@@ -149,13 +151,66 @@ final class AppState: ObservableObject {
         selectionAnchor = id
     }
 
+    /// Deletes clips. Deleting a *collected* clip (pinned or filed under a tag)
+    /// asks first: that clip lives in the user's archive, and removing it from
+    /// the main list also removes it from its tag.
     func delete(ids: [ClipItem.ID]) {
+        let split = Self.splitDeletion(ids: ids, items: store.items)
+        guard split.collected.isEmpty else {
+            pendingDeletion = ids
+            return
+        }
+        performDelete(ids: ids)
+    }
+
+    /// Splits a deletion request into collected clips (which need confirmation)
+    /// and ordinary ones. Pure, so the self-test can exercise it.
+    static func splitDeletion(ids: [ClipItem.ID], items: [ClipItem])
+        -> (collected: [ClipItem.ID], plain: [ClipItem.ID]) {
+        var collected: [ClipItem.ID] = []
+        var plain: [ClipItem.ID] = []
+        for id in ids {
+            if items.first(where: { $0.id == id })?.isArchived == true {
+                collected.append(id)
+            } else {
+                plain.append(id)
+            }
+        }
+        return (collected, plain)
+    }
+
+    /// How many of the pending deletions are collected clips.
+    var pendingCollectedCount: Int {
+        (pendingDeletion ?? []).filter { id in
+            store.items.first(where: { $0.id == id })?.isArchived == true
+        }.count
+    }
+
+    /// Runs the deletion the user just confirmed.
+    func confirmPendingDeletion() {
+        guard let ids = pendingDeletion else { return }
+        pendingDeletion = nil
+        performDelete(ids: ids)
+    }
+
+    private func performDelete(ids: [ClipItem.ID]) {
         for id in ids {
             if let item = store.items.first(where: { $0.id == id }) { store.delete(item) }
             selectedIDs.remove(id)
         }
         if let selectedID, !store.items.contains(where: { $0.id == selectedID }) { self.selectedID = filteredItems.first?.id }
         objectWillChange.send()
+    }
+
+    /// Clears the rolling history, keeping the user's collected clips.
+    func clearHistory() {
+        let result = store.clearHistory()
+        selectedIDs.removeAll()
+        selectedID = filteredItems.first?.id
+        statusMessage = result.kept > 0
+            ? L("已清空 \(result.removed) 条，保留 \(result.kept) 条收藏",
+                "Cleared \(result.removed), kept \(result.kept) saved")
+            : L("已清空 \(result.removed) 条", "Cleared \(result.removed)")
     }
 
     func togglePin(ids: [ClipItem.ID]) {
@@ -187,7 +242,9 @@ final class AppState: ObservableObject {
         guard !targetIDs.isEmpty else { return }
         for item in store.items.filter({ targetIDs.contains($0.id) }) where item.itemTags.contains(tag) {
             var updated = item
-            updated.tags = item.itemTags.filter { $0 != tag }
+            let remaining = item.itemTags.filter { $0 != tag }
+            // Keep "no tags" as nil, the same shape addTag/deleteTag produce.
+            updated.tags = remaining.isEmpty ? nil : remaining
             store.update(updated)
         }
         objectWillChange.send()

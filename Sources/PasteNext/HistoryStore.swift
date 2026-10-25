@@ -210,6 +210,11 @@ final class HistoryStore: ObservableObject {
         if let name = item.imageFilename, !items.contains(where: { $0.imageFilename == name }) {
             try? FileManager.default.removeItem(at: imagesDirectory.appendingPathComponent(name))
         }
+        // The archived HTML payload is a sidecar file; without this it would
+        // linger in Fragments/ long after its clip is gone.
+        if let name = item.htmlFilename {
+            try? FileManager.default.removeItem(at: fragmentsDirectory.appendingPathComponent(name))
+        }
         scheduleSave()
     }
 
@@ -222,15 +227,25 @@ final class HistoryStore: ObservableObject {
         scheduleSave()
     }
 
-    func clearUnpinned() {
-        let removed = items.filter { !$0.isPinned }
-        items.removeAll { !$0.isPinned }
+    /// Clears the rolling history but keeps everything the user collected.
+    ///
+    /// Pinned clips and clips filed under a tag are the user's own archive: a
+    /// "clear history" must not take them away, otherwise filing a clip into a
+    /// tag would be pointless.
+    @discardableResult
+    func clearHistory() -> (removed: Int, kept: Int) {
+        let removed = items.filter { !$0.isArchived }
+        items.removeAll { !$0.isArchived }
         for item in removed {
             if let name = item.imageFilename, !items.contains(where: { $0.imageFilename == name }) {
                 try? FileManager.default.removeItem(at: imagesDirectory.appendingPathComponent(name))
             }
+            if let name = item.htmlFilename {
+                try? FileManager.default.removeItem(at: fragmentsDirectory.appendingPathComponent(name))
+            }
         }
         scheduleSave()
+        return (removed.count, items.count)
     }
 
     func image(for item: ClipItem) -> NSImage? {
@@ -261,7 +276,8 @@ final class HistoryStore: ObservableObject {
         var kept: [ClipItem] = []
         var removed: [ClipItem] = []
         for item in items {
-            if kept.count < limit || item.isPinned { kept.append(item) } else { removed.append(item) }
+            // Collected clips are never evicted by the size limit.
+            if kept.count < limit || item.isArchived { kept.append(item) } else { removed.append(item) }
         }
         items = kept
         for item in removed {

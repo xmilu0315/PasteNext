@@ -396,6 +396,53 @@ enum SelfTest {
             expect(store2.items.count == 2, "a copy far apart in time does not merge")
         }
 
+        // ---- Collected clips survive clearing and trimming ------------------
+        do {
+            let scratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("pastenext-selftest-archive-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let store = HistoryStore(directory: scratch, load: false)
+
+            let plain = ClipItem(kind: .text, text: "普通历史")
+            let pinned = ClipItem(kind: .text, text: "常驻", isPinned: true)
+            let tagged = ClipItem(kind: .text, text: "归入标签", tags: ["常用"])
+            store.add(plain)
+            store.add(pinned)
+            store.add(tagged)
+
+            expect(plain.isArchived == false, "a plain clip is not collected")
+            expect(pinned.isArchived, "a pinned clip is collected")
+            expect(tagged.isArchived, "a tagged clip is collected")
+
+            let split = AppState.splitDeletion(ids: [plain.id, pinned.id, tagged.id], items: store.items)
+            expect(split.collected.count == 2, "pinned and tagged clips need confirmation")
+            expect(split.plain == [plain.id], "the plain clip deletes without asking")
+
+            let result = store.clearHistory()
+            expect(result.removed == 1, "clear history removes only the plain clip")
+            expect(result.kept == 2, "clear history keeps both collected clips")
+            expect(store.items.contains(where: { $0.id == tagged.id }),
+                   "a clip filed under a tag survives clear history")
+        }
+
+        // ---- Collected clips are never evicted by the size limit ------------
+        do {
+            let scratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("pastenext-selftest-trim-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let store = HistoryStore(directory: scratch, load: false)
+            store.limit = 2
+            store.add(ClipItem(kind: .text, text: "收藏的那条", tags: ["常用"]))
+            for index in 0..<5 {
+                store.add(ClipItem(kind: .text, text: "普通 \(index)"))
+            }
+            expect(store.items.contains(where: { $0.text == "收藏的那条" }),
+                   "the tagged clip survives trimming")
+            // limit 2 + the collected clip that the limit must not evict.
+            expect(store.items.count == 3,
+                   "trim keeps the limit plus the collected clip, got \(store.items.count)")
+        }
+
         // ---- Multi-file clips keep their names and folder apart -------------
         do {
             let multi = ClipItem(kind: .files, text: "a.pdf\nb.docx",
