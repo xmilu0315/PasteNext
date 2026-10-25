@@ -47,8 +47,69 @@ struct ClipItem: Codable, Identifiable, Equatable {
     /// A picture-only clip has no text, so this is what tells two screenshots
     /// apart when de-duplicating, and what the card shows as its description.
     var imageSize: String? = nil
+    /// Whether the text came BEFORE the picture in the copied content. Browsers
+    /// and rich-text apps put them in a specific order; the card and the pasted
+    /// payload must both respect it instead of always drawing the picture first.
+    var textFirst: Bool = false
 
     var itemTags: [String] { tags ?? [] }
+
+    /// Explicit keys so the decoder below can be tolerant.
+    enum CodingKeys: String, CodingKey {
+        case id, kind, text, createdAt, isPinned, title, sourceBundleID, sourceName,
+             sourcePath, isRemote, imageFilename, filePaths, tags, sortIndex, imageSize, textFirst
+    }
+
+    /// Tolerant decoding.
+    ///
+    /// Swift's synthesised decoder ignores default values: a non-optional field
+    /// added later makes every existing history file undecodable, and the store
+    /// then starts empty and writes that emptiness back over the user's data.
+    /// Every field that can be absent therefore uses `decodeIfPresent`.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(ClipKind.self, forKey: .kind)
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        isPinned = try c.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        isRemote = try c.decodeIfPresent(Bool.self, forKey: .isRemote) ?? false
+        textFirst = try c.decodeIfPresent(Bool.self, forKey: .textFirst) ?? false
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        sourceBundleID = try c.decodeIfPresent(String.self, forKey: .sourceBundleID)
+        sourceName = try c.decodeIfPresent(String.self, forKey: .sourceName)
+        sourcePath = try c.decodeIfPresent(String.self, forKey: .sourcePath)
+        imageFilename = try c.decodeIfPresent(String.self, forKey: .imageFilename)
+        filePaths = try c.decodeIfPresent([String].self, forKey: .filePaths)
+        tags = try c.decodeIfPresent([String].self, forKey: .tags)
+        sortIndex = try c.decodeIfPresent(Double.self, forKey: .sortIndex)
+        imageSize = try c.decodeIfPresent(String.self, forKey: .imageSize)
+    }
+
+    /// Memberwise initialiser kept explicit because the custom decoder above
+    /// suppresses the synthesised one.
+    init(id: UUID = UUID(), kind: ClipKind, text: String, createdAt: Date = Date(),
+         isPinned: Bool = false, title: String? = nil, sourceBundleID: String? = nil,
+         sourceName: String? = nil, sourcePath: String? = nil, isRemote: Bool = false,
+         imageFilename: String? = nil, filePaths: [String]? = nil, tags: [String]? = nil,
+         sortIndex: Double? = nil, imageSize: String? = nil, textFirst: Bool = false) {
+        self.id = id
+        self.kind = kind
+        self.text = text
+        self.createdAt = createdAt
+        self.isPinned = isPinned
+        self.title = title
+        self.sourceBundleID = sourceBundleID
+        self.sourceName = sourceName
+        self.sourcePath = sourcePath
+        self.isRemote = isRemote
+        self.imageFilename = imageFilename
+        self.filePaths = filePaths
+        self.tags = tags
+        self.sortIndex = sortIndex
+        self.imageSize = imageSize
+        self.textFirst = textFirst
+    }
     var effectiveSortIndex: Double { sortIndex ?? createdAt.timeIntervalSinceReferenceDate }
     /// The text this clip carries, if any.
     ///

@@ -52,6 +52,14 @@ enum PasteService {
             }
             if let image {
                 if writeImage(image, to: pb) { wrote = true }
+                // Rich text is what lets a word processor receive text AND the
+                // picture in one paste. Without it the target just takes the
+                // image flavour and the words are lost.
+                if let caption = item.captionText {
+                    if writeRichText(text: caption, image: image, textFirst: item.textFirst, to: pb) {
+                        wrote = true
+                    }
+                }
             }
             // A plain file clip already put its name on the board as part of the
             // file payload; adding a bare string would make some apps paste the
@@ -129,6 +137,84 @@ enum PasteService {
             if pb.setString(list, forType: .init("text/uri-list")) { wrote = true }
         }
         return wrote
+    }
+
+    /// Writes the clip as rich text so a word processor receives the words AND
+    /// the picture from one paste, in the order they were copied.
+    ///
+    /// AppKit's own RTF export silently drops `NSTextAttachment` images (the
+    /// result contains no `\pict` at all), so the RTF is generated directly —
+    /// the standard `\*\shppict{\pict\pngblip …}` form that Word and Pages
+    /// understand. HTML with an inline data URI is written as well, because
+    /// several editors prefer that flavour.
+    private static func writeRichText(text: String, image: NSImage,
+                                      textFirst: Bool, to pb: NSPasteboard) -> Bool {
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return false }
+        let width = max(1, Int(image.size.width))
+        let height = max(1, Int(image.size.height))
+        var wrote = false
+
+        if let rtf = rtfDocument(text: text, png: png, width: width, height: height,
+                                 textFirst: textFirst) {
+            if pb.setData(rtf, forType: .rtf) { wrote = true }
+        }
+        // Keep the HTML payload reasonable; very large pictures stay RTF-only.
+        if png.count <= 8_000_000,
+           let html = htmlDocument(text: text, png: png, textFirst: textFirst) {
+            if pb.setString(html, forType: .html) { wrote = true }
+        }
+        return wrote
+    }
+
+    /// RTF with an embedded PNG, honouring the copied order.
+    private static func rtfDocument(text: String, png: Data,
+                                    width: Int, height: Int, textFirst: Bool) -> Data? {
+        func escape(_ value: String) -> String {
+            var out = ""
+            for scalar in value.unicodeScalars {
+                switch scalar {
+                case "\\": out += "\\\\"
+                case "{": out += "\\{"
+                case "}": out += "\\}"
+                case "\n": out += "\\par "
+                case "\r": break
+                case "\t": out += "\\tab "
+                default:
+                    if scalar.value < 128 {
+                        out.unicodeScalars.append(scalar)
+                    } else {
+                        // RTF escapes every non-ASCII scalar as \uN?
+                        out += "\\u\(Int(scalar.value))?"
+                    }
+                }
+            }
+            return out
+        }
+        let hex = png.map { String(format: "%02x", $0) }.joined()
+        let picture = "{\\*\\shppict{\\pict\\pngblip\\picw\(width)\\pich\(height)"
+            + "\\picwgoal\(width * 15)\\pichgoal\(height * 15) \(hex)}}"
+        let paragraph = "\\f0\\fs26 \(escape(text))\\par "
+        let body = textFirst ? paragraph + "\n" + picture : picture + "\n" + paragraph
+        let rtf = "{\\rtf1\\ansi\\ansicpg936\\deff0"
+            + "{\\fonttbl{\\f0\\fnil\\fcharset134 PingFang SC;}}\n\(body)\n}"
+        return rtf.data(using: .utf8)
+    }
+
+    /// HTML with an inline data URI, honouring the copied order.
+    private static func htmlDocument(text: String, png: Data, textFirst: Bool) -> String? {
+        func escape(_ value: String) -> String {
+            value.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+                .replacingOccurrences(of: "\n", with: "<br>")
+        }
+        let base64 = png.base64EncodedString()
+        let paragraph = "<p>\(escape(text))</p>"
+        let picture = "<p><img src=\"data:image/png;base64,\(base64)\"></p>"
+        let body = textFirst ? paragraph + picture : picture + paragraph
+        return "<html><body>\(body)</body></html>"
     }
 
     private static func writeImage(_ image: NSImage, to pb: NSPasteboard) -> Bool {

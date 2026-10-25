@@ -58,9 +58,14 @@ struct ClipCard: View, Equatable {
     }
 
     @ViewBuilder private var cardContent: some View {
-        // A clip can carry a picture, text and files all at once, so show every
-        // part that is present instead of only the one that defined `kind`.
+        // A clip can carry a picture, text and files all at once. Render them in
+        // the order they were copied in — a paragraph followed by a picture must
+        // not turn into a picture followed by a paragraph.
         VStack(alignment: .leading, spacing: 6) {
+            if item.textFirst, let caption = item.captionText {
+                captionText(caption)
+            }
+
             if let image {
                 Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: compact ? 78 : 118, alignment: .leading)
@@ -73,23 +78,25 @@ struct ClipCard: View, Equatable {
             case .files:
                 filesRow
             case .image:
-                // The caption always renders under the picture — an image+text
-                // copy must show both. Only when the picture itself is missing
-                // does the card fall back to the placeholder.
-                if let caption = item.captionText {
-                    Text(caption).font(.system(size: compact ? 10 : 12))
-                        .foregroundColor(.secondary)
-                        .lineLimit(compact ? 2 : 4).truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else if image == nil {
+                if !item.textFirst, let caption = item.captionText {
+                    captionText(caption)
+                } else if image == nil, item.captionText == nil {
                     Label(L("图片不可用", "Image unavailable"), systemImage: "photo")
                 }
             case .text, .link, .code:
-                if let caption = item.captionText {
+                if let caption = item.captionText, !item.textFirst || image == nil {
                     kindText(caption)
                 }
             }
         }
+    }
+
+    /// The caption shown next to a picture.
+    private func captionText(_ caption: String) -> some View {
+        Text(caption).font(.system(size: compact ? 10 : 12))
+            .foregroundColor(.secondary)
+            .lineLimit(compact ? 2 : 4).truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The text block for the non-picture kinds, keeping each one's own look.

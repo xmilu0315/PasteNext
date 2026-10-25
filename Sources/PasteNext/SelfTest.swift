@@ -547,6 +547,84 @@ enum SelfTest {
             }
         }
 
+        // ---- Backward compatibility of the history file --------------------
+        // A missing non-optional key used to make the whole file undecodable,
+        // which silently emptied the store and wiped the user's history.
+        do {
+            let legacy = """
+            [{"id":"11111111-1111-1111-1111-111111111111","kind":"text","text":"旧格式条目",
+              "createdAt":"2026-10-25T10:00:00Z","isPinned":false,"isRemote":false}]
+            """
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            if let items = try? decoder.decode([ClipItem].self, from: Data(legacy.utf8)) {
+                expect(items.count == 1, "legacy history decodes")
+                expect(items.first?.text == "旧格式条目", "legacy text survives")
+                expect(items.first?.textFirst == false, "missing textFirst defaults to false")
+                expect(items.first?.imageSize == nil, "missing imageSize defaults to nil")
+            } else {
+                expect(false, "legacy history decodes")
+            }
+        }
+
+        // ---- Content order (text first vs picture first) --------------------
+        do {
+            func orderBoard(_ html: String) -> ClipItem? {
+                let board = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.order.\(UUID().uuidString)"))
+                board.clearContents()
+                let image = solidImage(.systemTeal, 40, 30)
+                let item = NSPasteboardItem()
+                if let tiff = image.tiffRepresentation { item.setData(tiff, forType: .tiff) }
+                item.setString(html, forType: .init("public.html"))
+                item.setString("正文文字", forType: .string)
+                board.writeObjects([item])
+                let monitor = ClipboardMonitor(pasteboard: board)
+                var captured: ClipItem?
+                monitor.onCapture = { clip, _ in captured = clip }
+                monitor.captureNowForTesting()
+                return captured
+            }
+            let textFirst = orderBoard("<html><body><p>正文文字</p><img src=\"pic.png\"></body></html>")
+            expect(textFirst?.textFirst == true, "text before picture is recorded")
+            let imageFirst = orderBoard("<html><body><img src=\"pic.png\"><p>正文文字</p></body></html>")
+            expect(imageFirst?.textFirst == false, "picture before text is recorded")
+        }
+
+        // ---- Rich-text paste carries both halves, in order ----------------
+        do {
+            func richBoard(_ textFirst: Bool) -> NSPasteboard {
+                let board = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.rtf.\(UUID().uuidString)"))
+                let image = solidImage(.systemPink, 48, 32)
+                let clip = ClipItem(kind: .image, text: "图注文字在正文中", imageSize: "48×32",
+                                    textFirst: textFirst)
+                PasteService.copy(clip, image: image, monitor: ClipboardMonitor(pasteboard: board),
+                                  paste: false, pasteboard: board)
+                return board
+            }
+
+            let board = richBoard(true)
+            expect(board.data(forType: .rtf) != nil, "paste writes an RTF flavour")
+            expect(board.string(forType: .html)?.contains("data:image/png;base64,") == true,
+                   "paste writes HTML with an inline picture")
+            expect(board.string(forType: .string) == "图注文字在正文中", "paste keeps the plain text")
+
+            // Structure: the text must precede the picture when that is the
+            // order it was copied in, and follow it otherwise.
+            let rtfText = String(data: board.data(forType: .rtf) ?? Data(), encoding: .utf8) ?? ""
+            expect(rtfText.contains("pngblip"), "RTF embeds the picture")
+            expect(rtfText.contains("\\u22270"), "RTF escapes the caption")
+
+            let htmlTextFirst = board.string(forType: .html) ?? ""
+            let textAt = htmlTextFirst.range(of: "图注文字")?.lowerBound
+            let imgAt = htmlTextFirst.range(of: "<img")?.lowerBound
+            expect(textAt != nil && imgAt != nil && textAt! < imgAt!, "text-first order is preserved")
+
+            let reversed = richBoard(false).string(forType: .html) ?? ""
+            let textAt2 = reversed.range(of: "图注文字")?.lowerBound
+            let imgAt2 = reversed.range(of: "<img")?.lowerBound
+            expect(textAt2 != nil && imgAt2 != nil && imgAt2! < textAt2!, "picture-first order is preserved")
+        }
+
         // ---- The paste side ------------------------------------------------
         // An image+text clip must put BOTH on the board, so a rich-text target
         // (a WeChat input box, for instance) receives the picture and the words.

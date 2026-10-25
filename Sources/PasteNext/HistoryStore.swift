@@ -88,6 +88,10 @@ final class HistoryStore: ObservableObject {
         if item.filePaths != nil { merged.filePaths = item.filePaths }
         if item.title != nil { merged.title = item.title }
         if item.sourceName != nil { merged.sourceName = item.sourceName }
+        // First sighting wins on ordering: whichever half arrived first is also
+        // where it sat in the copied content.
+        if !lastHasText && newHasText { merged.textFirst = true }
+        if !lastHasImage && newHasImage { merged.textFirst = false }
         merged.createdAt = item.createdAt
         // With both halves present this is an image clip; the picture is what
         // the user cares about, the caption rides along.
@@ -228,19 +232,35 @@ final class HistoryStore: ObservableObject {
         let url = historyURL
         let work = DispatchWorkItem {
             guard let data = try? JSONEncoder.pasteNext.encode(snapshot) else { return }
-            // Refuse to shrink the file drastically in one write. A store that
-            // failed to load (corrupt read, a second process with a partial
-            // view) would otherwise stamp its near-empty state over a healthy
-            // history — that is exactly how 79 clips were lost once.
-            if let onDisk = try? Data(contentsOf: url),
-               let existing = try? JSONDecoder.pasteNext.decode([ClipItem].self, from: onDisk),
-               existing.count >= 5,
-               snapshot.count * 2 < existing.count {
-                Diagnostics.log("store.save.blocked", [
-                    "memory": String(snapshot.count),
-                    "onDisk": String(existing.count)
-                ])
-                return
+            // Two protections against the same class of data loss:
+            // 1. Never stamp a drastically smaller history over a healthy one.
+            // 2. Never overwrite a file this build cannot parse — keep a copy
+            //    first, so a corrupt write is always recoverable.
+            if let onDisk = try? Data(contentsOf: url), !onDisk.isEmpty {
+                if let existing = try? JSONDecoder.pasteNext.decode([ClipItem].self, from: onDisk) {
+                    if existing.count >= 5, snapshot.count * 2 < existing.count {
+                        Diagnostics.log("store.save.blocked", [
+                            "reason": "shrink",
+                            "memory": String(snapshot.count),
+                            "onDisk": String(existing.count)
+                        ])
+                        return
+                    }
+                } else if onDisk.count > 512 {
+                    // Unparsable but non-trivial: keep a copy AND refuse to
+                    // write. A store that could not read the file must never
+                    // replace it — that is how a healthy history got wiped.
+                    let stamp = Int(Date().timeIntervalSince1970)
+                    let backup = url.deletingLastPathComponent()
+                        .appendingPathComponent("history.corrupt-\(stamp).json")
+                    try? onDisk.write(to: backup)
+                    Diagnostics.log("store.save.blocked", [
+                        "reason": "unparsable-on-disk",
+                        "bytes": String(onDisk.count),
+                        "backup": backup.lastPathComponent
+                    ])
+                    return
+                }
             }
             try? data.write(to: url, options: .atomic)
         }

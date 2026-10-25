@@ -173,6 +173,13 @@ final class ClipboardMonitor: ObservableObject {
         } else {
             contentText = ""
         }
+        // Order of the two halves, read from the HTML document order.
+        var textFirst = false
+        if kind == .image, !contentText.isEmpty {
+            if let html = htmlPayload() {
+                textFirst = textPrecedesImage(in: html)
+            }
+        }
         let item = ClipItem(
             kind: kind,
             text: contentText,
@@ -181,7 +188,8 @@ final class ClipboardMonitor: ObservableObject {
             sourcePath: app?.bundleURL?.path,
             isRemote: isRemote,
             filePaths: fileURLs.isEmpty ? nil : fileURLs.map(\.path),
-            imageSize: image.map { "\(Int($0.size.width))×\(Int($0.size.height))" }
+            imageSize: image.map { "\(Int($0.size.width))×\(Int($0.size.height))" },
+            textFirst: textFirst
         )
         onSound?()
         // Browser image+text copies carry only an <img> URL — no image data.
@@ -518,6 +526,31 @@ final class ClipboardMonitor: ObservableObject {
             }
         }
         return nil
+    }
+
+    /// The raw HTML payload, when the source put one on the board.
+    private func htmlPayload() -> String? {
+        for type in [NSPasteboard.PasteboardType("public.html"),
+                     NSPasteboard.PasteboardType("Apple HTML pasteboard type")] {
+            if let data = pasteboard.data(forType: type),
+               let html = String(data: data, encoding: .utf8), !html.isEmpty {
+                return html
+            }
+        }
+        return nil
+    }
+
+    /// True when visible text appears before the first `<img>` in the document.
+    private func textPrecedesImage(in html: String) -> Bool {
+        guard let imgRange = html.range(of: "<img", options: .caseInsensitive) else {
+            // No picture in the markup: the text is the whole content.
+            return true
+        }
+        let head = String(html[html.startIndex..<imgRange.lowerBound])
+        // Strip tags, then look for anything that is not whitespace.
+        let stripped = head.replacingOccurrences(of: "<[^>]+>", with: " ",
+                                                 options: .regularExpression)
+        return stripped.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.inverted) != nil
     }
 
     /// Remote image URLs from the HTML payload, in document order.
