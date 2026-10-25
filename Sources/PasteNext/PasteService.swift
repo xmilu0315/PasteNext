@@ -20,6 +20,29 @@ enum PasteService {
             // every part that is present so the target app receives the whole
             // thing instead of only whichever part happened to define `kind`.
             if item.kind == .files, let paths = item.filePaths, !paths.isEmpty {
+                // A file that lives inside another app's container is only
+                // resolvable if THIS process can read it: the file URL we write
+                // carries our own access rights, not the original copier's. When
+                // Full Disk Access is missing, WeChat temp files and the like
+                // become dead URLs for every target app.
+                let unreadable = paths.filter { !FileManager.default.isReadableFile(atPath: $0) }
+                if !unreadable.isEmpty && !Permissions.fullDiskAccess {
+                    Diagnostics.log("paste.blocked", [
+                        "reason": "file-not-readable",
+                        "count": String(unreadable.count),
+                        "sample": String((unreadable.first ?? "").prefix(160))
+                    ])
+                    AppState.shared.statusMessage = L(
+                        "需要完全磁盘访问权限才能粘贴其他应用的文件",
+                        "Full Disk Access is required to paste files from other apps")
+                }
+                for path in paths {
+                    Diagnostics.log("paste.file", [
+                        "path": String(path.prefix(180)),
+                        "exists": String(FileManager.default.fileExists(atPath: path)),
+                        "readable": String(FileManager.default.isReadableFile(atPath: path))
+                    ])
+                }
                 wrote = writeFiles(paths, to: pb)
             }
             if let image {
@@ -54,7 +77,7 @@ enum PasteService {
         // Auto-paste needs Accessibility. Without it the clipboard is already
         // correct but no ⌘V is ever delivered, which looks like "nothing
         // happened" — so say so instead of failing silently.
-        guard AXIsProcessTrusted() else {
+        guard Permissions.accessibility else {
             Diagnostics.log("paste.blocked", ["reason": "accessibility-not-granted"])
             AppState.shared.statusMessage = L("需要辅助功能权限才能自动粘贴", "Accessibility permission required to auto-paste")
             promptAccessibility()

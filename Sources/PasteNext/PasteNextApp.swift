@@ -39,6 +39,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // No window is created at launch. The panel exists only while the user asks for it.
         #if DEBUG
+        // Decisive experiment: can a file that lives inside ANOTHER app's
+        // container (TCC-protected) be pasted via PasteNext into Finder?
+        if CommandLine.arguments.contains("--e2e-container") {
+            func log(_ s: String) { print(s); fflush(stdout) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                let fm = FileManager.default
+                // The WeChat container file from the real history.
+                let history = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Library/Application Support/PasteNext/history.json")
+                guard let data = try? Data(contentsOf: history),
+                      let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                    log("cannot read history"); NSApp.terminate(nil); return
+                }
+                var target: String? = nil
+                for item in items {
+                    for p in (item["filePaths"] as? [String]) ?? [] where p.contains("xinWeChat") {
+                        if fm.fileExists(atPath: p) { target = p; break }
+                    }
+                    if target != nil { break }
+                }
+                guard let path = target else {
+                    log("no container file available"); NSApp.terminate(nil); return
+                }
+                let readable = fm.isReadableFile(atPath: path)
+                log("file: \((path as NSString).lastPathComponent)")
+                log("readable from PasteNext: \(readable)")
+
+                let dst = URL(fileURLWithPath: "/tmp/pn-cdst")
+                try? fm.createDirectory(at: dst, withIntermediateDirectories: true)
+                for f in ((try? fm.contentsOfDirectory(at: dst, includingPropertiesForKeys: nil)) ?? []) {
+                    try? fm.removeItem(at: f)
+                }
+
+                let pb = NSPasteboard.general
+                AppState.shared.monitor.ignoreNextWrite()
+                pb.clearContents()
+                let pi = NSPasteboardItem()
+                pi.setString(URL(fileURLWithPath: path).absoluteString, forType: .fileURL)
+                pb.writeObjects([pi])
+                log("board seeded")
+
+                if let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first {
+                    finder.activate()
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    let source = CGEventSource(stateID: .combinedSessionState)
+                    let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
+                    let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
+                    down?.flags = .maskCommand
+                    up?.flags = .maskCommand
+                    down?.post(tap: .cgAnnotatedSessionEventTap)
+                    up?.post(tap: .cgAnnotatedSessionEventTap)
+                    log("posted ⌘V to Finder")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                        let landed = ((try? fm.contentsOfDirectory(at: dst, includingPropertiesForKeys: nil)) ?? [])
+                            .map(\.lastPathComponent)
+                        log("dst contents: \(landed)")
+                        log(landed.isEmpty ? "FAIL: 文件未能粘贴（TCC 拦截）" : "PASS: \(landed)")
+                        NSApp.terminate(nil)
+                    }
+                }
+            }
+        }
         if CommandLine.arguments.contains("--show-panel") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { PanelController.shared.show() }
         }

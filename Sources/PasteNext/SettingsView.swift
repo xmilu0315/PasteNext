@@ -137,13 +137,48 @@ struct SettingsView: View {
                     .font(.caption).foregroundColor(.secondary)
             } header: { Text(L("剪贴板隐私", "Clipboard Privacy")) }
             Section {
-                LabeledContent(L("自动粘贴权限", "Auto-paste permission")) {
-                    Button(L("检查并授权", "Check & Authorize")) { PasteService.promptAccessibility() }
-                }
-                Text(L("仅自动按下 ⌘V 时需要辅助功能权限；全局激活快捷键不依赖此权限。", "Accessibility is only needed to simulate ⌘V; the global activation shortcut works without it."))
+                permissionRow(
+                    name: L("辅助功能", "Accessibility"),
+                    granted: Permissions.accessibility,
+                    description: L("自动按下 ⌘V 时需要；全局激活快捷键不依赖此权限。", "Needed to simulate ⌘V; the global activation shortcut works without it."),
+                    grant: { Permissions.openSettings(for: .accessibility) }
+                )
+                permissionRow(
+                    name: L("完全磁盘访问", "Full Disk Access"),
+                    granted: Permissions.fullDiskAccess,
+                    description: L("粘贴其他应用（如微信）沙盒内的文件时需要；缺少它时这类文件的 URL 对任何应用都不可用。", "Needed to paste files that live inside another app's container (WeChat, for instance); without it those file URLs are dead for every target app."),
+                    grant: { Permissions.openSettings(for: .fullDiskAccess) }
+                )
+            } header: { Text(L("系统权限", "System Permission")) } footer: {
+                Text(L("授权后若仍不生效，请退出并重新打开 PasteNext。", "If a grant does not take effect, quit and relaunch PasteNext."))
                     .font(.caption).foregroundColor(.secondary)
-            } header: { Text(L("系统权限", "System Permission")) }
+            }
         }.formStyle(.grouped)
+    }
+
+    /// One permission row: a live status badge plus a deep link into the exact
+    /// System Settings pane, so a missing grant never has to be guessed at.
+    private func permissionRow(name: String, granted: Bool,
+                               description: String,
+                               grant: @escaping () -> Void) -> some View {
+        LabeledContent {
+            HStack(spacing: 8) {
+                Text(granted ? L("已授权", "Granted") : L("未授权", "Not granted"))
+                    .font(.caption).fontWeight(.semibold)
+                    .foregroundColor(granted ? .green : .orange)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background((granted ? Color.green : Color.orange).opacity(0.14))
+                    .cornerRadius(5)
+                if !granted {
+                    Button(L("去授权", "Grant")) { grant() }
+                }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).font(.body.weight(.medium))
+                Text(description).font(.caption).foregroundColor(.secondary)
+            }
+        }
     }
 
     private var excludedAppsEditor: some View {
