@@ -5,7 +5,9 @@ import Foundation
 enum SelfTest {
     static func run() {
         var failures: [String] = []
+        var asserted = 0
         func expect(_ condition: Bool, _ name: String) {
+            asserted += 1
             if !condition { failures.append(name) }
         }
         expect(ClipClassifier.classify("https://pastenow.app") == .link, "link classification")
@@ -378,12 +380,12 @@ enum SelfTest {
             expect(store.items.first?.kind == .image, "merged clip is an image clip")
 
             // A much later, unrelated copy must NOT merge: `later` is "now"
-            // while `oldPicture` is ten seconds old, so they are 10s apart.
+            // while `oldPicture` is 20 seconds old, beyond the 8s window.
             let later = ClipItem(kind: .text, text: "另一条",
                                  sourceBundleID: "com.tencent.xinWeChat")
             let store2 = HistoryStore(directory: scratch, load: false)
             let oldPicture = ClipItem(kind: .image, text: "",
-                                      createdAt: Date().addingTimeInterval(-10),
+                                      createdAt: Date().addingTimeInterval(-20),
                                       sourceBundleID: "com.tencent.xinWeChat", imageSize: "64×44")
             store2.mergeOrAdd(oldPicture, image: image)
             store2.mergeOrAdd(later, image: nil)
@@ -401,6 +403,43 @@ enum SelfTest {
             store.add(ClipItem(kind: .text, text: "较旧内容"))
             store.add(ClipItem(kind: .text, text: "最新内容"))
             expect(store.items.first?.text == "最新内容", "store.items is newest-first")
+        }
+
+        // ---- The exact staged copy from the diagnostics log ----------------
+        // WeChat delivered: picture only (1x), caption only, then the final
+        // picture+caption+file with a Retina 2x picture. Spans ~7 seconds.
+        // All three stages must collapse into ONE complete card.
+        do {
+            let scratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("pastenext-selftest-wechat-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let store = HistoryStore(directory: scratch, load: false)
+            let small = solidImage(.systemTeal, 108, 80)
+            let big = solidImage(.systemTeal, 216, 160)
+            let now = Date()
+
+            // Stage 1: picture only, no caption. (+0.0s)
+            var item = ClipItem(kind: .image, text: "",
+                                createdAt: now,
+                                sourceBundleID: "com.tencent.xinWeChat", imageSize: "1082×800")
+            store.mergeOrAdd(item, image: small)
+            // Stage 2: caption only. (+4.6s)
+            item = ClipItem(kind: .text, text: "据报道，在首销当天…",
+                            createdAt: now.addingTimeInterval(4.6),
+                            sourceBundleID: "com.tencent.xinWeChat")
+            store.mergeOrAdd(item, image: nil)
+            // Stage 3: everything, with the 2x picture. (+7.0s)
+            item = ClipItem(kind: .image, text: "据报道，在首销当天…",
+                            createdAt: now.addingTimeInterval(7.0),
+                            sourceBundleID: "com.tencent.xinWeChat",
+                            filePaths: ["/tmp/wechat-temp.png"], imageSize: "2164×1600")
+            store.mergeOrAdd(item, image: big)
+
+            expect(store.items.count == 1,
+                   "three staged copies collapse into one card, got \(store.items.count)")
+            expect(store.items.first?.captionText == "据报道，在首销当天…", "merge keeps the caption")
+            expect(store.items.first?.imageSize == "2164×1600", "merge takes the final Retina picture")
+            expect(store.items.first?.filePaths?.count == 1, "merge keeps the file path")
         }
 
         // ---- The paste side ------------------------------------------------
@@ -455,7 +494,7 @@ enum SelfTest {
         }
 
         if failures.isEmpty {
-            print("PasteNext self-test: 71/71 passed")
+            print("PasteNext self-test: \(asserted - failures.count)/\(asserted) passed\(failures.isEmpty ? "" : " — \(failures.count) FAILED")")
             exit(0)
         } else {
             failures.forEach { print("FAIL: \($0)") }

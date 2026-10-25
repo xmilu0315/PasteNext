@@ -209,26 +209,34 @@ final class ClipboardMonitor: ObservableObject {
     /// 2. Despite its name, `public.utf16-external-plain-text` frequently holds
     ///    **UTF-8** data, so decoding it as UTF-16 produces garbage too.
     ///
-    /// The fix: read the *original* flavour first and try UTF-8 before UTF-16.
+    /// So the encoding order is decided per flavour, and a decode that produces
+    /// U+FFFD is rejected in favour of the next candidate.
     private func readText() -> String {
-        let prioritized: [NSPasteboard.PasteboardType] = [
-            .init("public.utf16-external-plain-text"),
-            .init("public.utf16-plain-text"),
-            .string,
-            .init("NSStringPboardType")
+        let prioritized: [(NSPasteboard.PasteboardType, [String.Encoding])] = [
+            // macOS writes UTF-8 bytes under this name.
+            (.init("public.utf16-external-plain-text"), [.utf8, .utf16]),
+            // Genuine UTF-16 payloads usually live here.
+            (.init("public.utf16-plain-text"), [.utf16, .utf8]),
+            (.string, [.utf8]),
+            (.init("NSStringPboardType"), [.utf8])
         ]
-        for type in prioritized {
+        var fallback = ""
+        for (type, encodings) in prioritized {
             guard let data = pasteboard.data(forType: type) else { continue }
-            // UTF-8 first: the raw payload is UTF-8 far more often than the
-            // flavour name suggests.
-            if let value = String(data: data, encoding: .utf8), !value.isEmpty {
-                return value.trimmingCharacters(in: .controlCharacters)
-            }
-            if let value = String(data: data, encoding: .utf16), !value.isEmpty {
-                return value.trimmingCharacters(in: .controlCharacters)
+            for encoding in encodings {
+                guard let value = String(data: data, encoding: encoding), !value.isEmpty else { continue }
+                let cleaned = value.trimmingCharacters(in: .controlCharacters)
+                guard !cleaned.isEmpty else { continue }
+                if value.contains("\u{FFFD}") {
+                    // Replacement characters mean this encoding is wrong for the
+                    // payload; remember it as a last resort and keep looking.
+                    if fallback.isEmpty { fallback = cleaned }
+                    continue
+                }
+                return cleaned
             }
         }
-        return pasteboard.string(forType: .string)?.trimmingCharacters(in: .controlCharacters) ?? ""
+        return fallback.isEmpty ? (pasteboard.string(forType: .string) ?? "") : fallback
     }
 
     private func readFileURLs(from pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> [URL] {

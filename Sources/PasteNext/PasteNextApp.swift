@@ -39,10 +39,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // No window is created at launch. The panel exists only while the user asks for it.
         #if DEBUG
-        // Reproduces a WeChat image+text copy end to end: the picture and the
-        // caption land on the board in separate stages (which is exactly how
-        // WeChat writes them), the text is UTF-16, and a temp-file URL carries
-        // the picture. The real monitor must end up with ONE complete clip.
         if CommandLine.arguments.contains("--show-panel") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { PanelController.shared.show() }
         }

@@ -28,58 +28,70 @@ final class HistoryStore: ObservableObject {
         if load { self.load() }
     }
 
-    /// Records a clip, merging it into the previous one when the two are
-    /// clearly two halves of a single copy.
+    /// Records a clip, folding it into the previous one when both are part of
+    /// the same staged copy.
     ///
-    /// WeChat (and some browsers) publish an image+text copy in stages: first
-    /// the picture lands on the board, then the text, then both. A polling
-    /// monitor sees the intermediate states and would otherwise file three
-    /// cards — one with only the picture, one with only the text, one complete.
-    /// Merging on (same source app, close in time, complementary content)
-    /// collapses them back into the single clip the user actually copied.
+    /// WeChat publishes an image+text copy in stages over several seconds — the
+    /// diagnostics log shows a 7-second span: picture only, then caption only,
+    /// then picture+caption+file (with the picture arriving at Retina 2x in the
+    /// final stage). Each stage *replaces* the whole pasteboard, so every
+    /// intermediate card is stale data: the user copied one thing, not three.
+    ///
+    /// A stage therefore supersedes the previous card when it comes from the
+    /// same app shortly after, and either fills the previous card's missing
+    /// half or is a superset of it (same text, plus an image/file). Anything
+    /// else is a genuinely new copy and gets its own card.
     func mergeOrAdd(_ item: ClipItem, image: NSImage? = nil) {
+        let window: TimeInterval = 8.0
         guard let last = items.first,
               last.sourceBundleID == item.sourceBundleID,
-              item.createdAt.timeIntervalSince(last.createdAt) < 3.0 else {
+              let gap = Optional(item.createdAt.timeIntervalSince(last.createdAt)),
+              gap >= 0, gap < window else {
             add(item, image: image)
             return
         }
 
-        let lastHasImage = last.imageFilename != nil
-        let newHasImage = image != nil
         let lastHasText = last.captionText != nil
         let newHasText = item.captionText != nil
+        let lastHasImage = last.imageFilename != nil
+        let newHasImage = image != nil
 
-        // Complementary: one side has the picture but no words, the other has
-        // the words but no picture.
-        let complementary =
-            (lastHasImage && !lastHasText && !newHasImage && newHasText) ||
-            (!lastHasImage && lastHasText && newHasImage && !newHasText)
+        let fillsMissingHalf =
+            (!lastHasText && newHasText) || (!lastHasImage && newHasImage)
+        // Same text (or the previous card had none) plus the same or more
+        // content — the final stage of a staged write.
+        let supersedes = newHasText && newHasImage &&
+            (last.captionText == nil || item.captionText == last.captionText)
 
-        guard complementary else {
+        guard fillsMissingHalf || supersedes else {
             add(item, image: image)
             return
         }
 
-        // Merge into the existing card instead of creating a new one.
         var merged = last
         if newHasText { merged.text = item.text }
-        if newHasImage {
-            if let name = saveImage(image!, id: merged.id) {
-                merged.imageFilename = name
+        if newHasImage, let image, let name = saveImage(image, id: merged.id) {
+            // The final stage usually carries the better (Retina) rendition.
+            if let old = last.imageFilename, old != name {
+                try? FileManager.default.removeItem(at: imagesDirectory.appendingPathComponent(old))
             }
-            merged.imageSize = item.imageSize
+            merged.imageFilename = name
         }
-        // With both halves present the clip is an image+text clip, whose
-        // primary kind is the picture.
-        if merged.imageFilename != nil && merged.captionText != nil {
-            merged.kind = .image
-        }
+        if let size = item.imageSize { merged.imageSize = size }
+        if item.filePaths != nil { merged.filePaths = item.filePaths }
+        if item.title != nil { merged.title = item.title }
+        if item.sourceName != nil { merged.sourceName = item.sourceName }
+        merged.createdAt = item.createdAt
+        // With both halves present this is an image clip; the picture is what
+        // the user cares about, the caption rides along.
+        if merged.imageFilename != nil { merged.kind = .image }
         update(merged)
         Diagnostics.log("capture.merged", [
             "kind": merged.kind.rawValue,
             "hasText": String(merged.captionText != nil),
-            "hasImage": String(merged.imageFilename != nil)
+            "hasImage": String(merged.imageFilename != nil),
+            "gap": String(format: "%.1fs", gap),
+            "superseded": String(supersedes)
         ])
     }
 
