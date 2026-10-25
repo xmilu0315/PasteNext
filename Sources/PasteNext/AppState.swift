@@ -53,7 +53,7 @@ final class AppState: ObservableObject {
         store.limit = max(50, UserDefaults.standard.integer(forKey: "historyLimit") == 0 ? 500 : UserDefaults.standard.integer(forKey: "historyLimit"))
         monitor.onCapture = { [weak self] item, image in
             guard let self else { return }
-            self.store.add(item, image: image)
+            self.store.mergeOrAdd(item, image: image)
             self.captureCount += 1
             self.selectedID = self.store.items.first(where: { existing in
                 if existing.kind != item.kind { return false }
@@ -89,10 +89,20 @@ final class AppState: ObservableObject {
     }
 
     func select(_ item: ClipItem) { selectedID = item.id }
+    /// Called every time the panel opens.
+    ///
+    /// Always focus the most recent copy, so Return or ⌘1 pastes it right away.
+    /// `store.items` is newest-first, so its first element is exactly that
+    /// clip — even when pinned cards sort above it in the list. Keeping the
+    /// previous selection here used to leave the highlight on a stale card.
     func reloadSelection() {
-        if selectedID == nil || !filteredItems.contains(where: { $0.id == selectedID }) {
+        if let latest = store.items.first, filteredItems.contains(where: { $0.id == latest.id }) {
+            selectedID = latest.id
+        } else {
             selectedID = filteredItems.first?.id
         }
+        selectedIDs = selectedID.map { [$0] } ?? []
+        selectionAnchor = selectedID
     }
     func selectedItem() -> ClipItem? {
         if let selectedID, let item = filteredItems.first(where: { $0.id == selectedID }) { return item }

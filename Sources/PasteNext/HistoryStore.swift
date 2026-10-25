@@ -11,14 +11,76 @@ final class HistoryStore: ObservableObject {
     private let imageCache = NSCache<NSString, NSImage>()
     var limit: Int = 500 { didSet { trim(); scheduleSave() } }
 
-    init() {
+    /// Creates the store.
+    ///
+    /// `directory` is injectable so a test can run against a throwaway location
+    /// instead of the user's real history, and `load` controls whether existing
+    /// history is read back. Without both, the self-test would overwrite the
+    /// live `history.json` and leave test data behind.
+    init(directory: URL? = nil, load: Bool = true) {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        directory = base.appendingPathComponent("PasteNext", isDirectory: true)
+        let dir = directory ?? base.appendingPathComponent("PasteNext", isDirectory: true)
+        self.directory = dir
         imageCache.countLimit = 40
-        historyURL = directory.appendingPathComponent("history.json")
-        imagesDirectory = directory.appendingPathComponent("Images", isDirectory: true)
+        historyURL = dir.appendingPathComponent("history.json")
+        imagesDirectory = dir.appendingPathComponent("Images", isDirectory: true)
         try? FileManager.default.createDirectory(at: imagesDirectory, withIntermediateDirectories: true)
-        load()
+        if load { self.load() }
+    }
+
+    /// Records a clip, merging it into the previous one when the two are
+    /// clearly two halves of a single copy.
+    ///
+    /// WeChat (and some browsers) publish an image+text copy in stages: first
+    /// the picture lands on the board, then the text, then both. A polling
+    /// monitor sees the intermediate states and would otherwise file three
+    /// cards — one with only the picture, one with only the text, one complete.
+    /// Merging on (same source app, close in time, complementary content)
+    /// collapses them back into the single clip the user actually copied.
+    func mergeOrAdd(_ item: ClipItem, image: NSImage? = nil) {
+        guard let last = items.first,
+              last.sourceBundleID == item.sourceBundleID,
+              item.createdAt.timeIntervalSince(last.createdAt) < 3.0 else {
+            add(item, image: image)
+            return
+        }
+
+        let lastHasImage = last.imageFilename != nil
+        let newHasImage = image != nil
+        let lastHasText = last.captionText != nil
+        let newHasText = item.captionText != nil
+
+        // Complementary: one side has the picture but no words, the other has
+        // the words but no picture.
+        let complementary =
+            (lastHasImage && !lastHasText && !newHasImage && newHasText) ||
+            (!lastHasImage && lastHasText && newHasImage && !newHasText)
+
+        guard complementary else {
+            add(item, image: image)
+            return
+        }
+
+        // Merge into the existing card instead of creating a new one.
+        var merged = last
+        if newHasText { merged.text = item.text }
+        if newHasImage {
+            if let name = saveImage(image!, id: merged.id) {
+                merged.imageFilename = name
+            }
+            merged.imageSize = item.imageSize
+        }
+        // With both halves present the clip is an image+text clip, whose
+        // primary kind is the picture.
+        if merged.imageFilename != nil && merged.captionText != nil {
+            merged.kind = .image
+        }
+        update(merged)
+        Diagnostics.log("capture.merged", [
+            "kind": merged.kind.rawValue,
+            "hasText": String(merged.captionText != nil),
+            "hasImage": String(merged.imageFilename != nil)
+        ])
     }
 
     func add(_ item: ClipItem, image: NSImage? = nil) {

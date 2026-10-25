@@ -87,9 +87,14 @@ final class ClipboardMonitor: ObservableObject {
         if bundleIsOwnApp(app?.bundleIdentifier) { return }
 
         var fileURLs = readFileURLs(from: pasteboard, types: types)
-        let text = pasteboard.string(forType: .string)?.trimmingCharacters(in: .controlCharacters) ?? ""
+        let text = readText()
         let imageTypes: [NSPasteboard.PasteboardType] = [
-            .tiff, .png, .init("public.jpeg"), .init("public.heic"), .init("public.webp"),
+            .tiff, .png,
+            // The NeXT/Apple spellings are distinct UTI strings, not aliases of
+            // public.tiff / public.png; several apps write only these.
+            .init("NeXT TIFF v4.0 pasteboard type"),
+            .init("Apple PNG pasteboard type"),
+            .init("public.jpeg"), .init("public.heic"), .init("public.webp"),
             .init("com.compuserve.gif"), .init("com.microsoft.bmp")
         ]
         let filesAreImages = fileURLs.isEmpty || fileURLs.allSatisfy {
@@ -192,6 +197,38 @@ final class ClipboardMonitor: ObservableObject {
 
     private func bundleIsOwnApp(_ bundle: String?) -> Bool {
         bundle != nil && bundle == Bundle.main.bundleIdentifier
+    }
+
+    /// Reads the clipboard's text without trusting AppKit's flavour mapping.
+    ///
+    /// Two traps, both verified against raw bytes:
+    /// 1. When an app publishes UTF-16 text (`public.utf16-external-plain-text`,
+    ///    which Qt-based apps such as WeChat use), the system *derives* a
+    ///    `public.utf8-plain-text` flavour whose bytes are already mangled.
+    ///    Reading `.string` therefore yields mojibake.
+    /// 2. Despite its name, `public.utf16-external-plain-text` frequently holds
+    ///    **UTF-8** data, so decoding it as UTF-16 produces garbage too.
+    ///
+    /// The fix: read the *original* flavour first and try UTF-8 before UTF-16.
+    private func readText() -> String {
+        let prioritized: [NSPasteboard.PasteboardType] = [
+            .init("public.utf16-external-plain-text"),
+            .init("public.utf16-plain-text"),
+            .string,
+            .init("NSStringPboardType")
+        ]
+        for type in prioritized {
+            guard let data = pasteboard.data(forType: type) else { continue }
+            // UTF-8 first: the raw payload is UTF-8 far more often than the
+            // flavour name suggests.
+            if let value = String(data: data, encoding: .utf8), !value.isEmpty {
+                return value.trimmingCharacters(in: .controlCharacters)
+            }
+            if let value = String(data: data, encoding: .utf16), !value.isEmpty {
+                return value.trimmingCharacters(in: .controlCharacters)
+            }
+        }
+        return pasteboard.string(forType: .string)?.trimmingCharacters(in: .controlCharacters) ?? ""
     }
 
     private func readFileURLs(from pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> [URL] {

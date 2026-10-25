@@ -337,10 +337,78 @@ enum SelfTest {
             }
         }
 
+        // ---- UTF-16 text decoding (WeChat and other Qt apps) ----------------
+        // macOS derives a broken public.utf8-plain-text from UTF-16 payloads,
+        // so reading .string yields mojibake. The raw original flavour must be
+        // read instead.
+        do {
+            let board = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.utf16"))
+            board.clearContents()
+            let item = NSPasteboardItem()
+            item.setString("测试文本ABC", forType: .init("public.utf16-external-plain-text"))
+            board.writeObjects([item])
+            let monitor = ClipboardMonitor(pasteboard: board)
+            var captured: ClipItem?
+            monitor.onCapture = { clip, _ in captured = clip }
+            monitor.captureNowForTesting()
+            expect(captured?.text == "测试文本ABC",
+                   "UTF-16 text decodes correctly (not mojibake), got: \(captured?.text ?? "nil")")
+        }
+
+        // ---- Complementary merge of staged image+text copies ---------------
+        do {
+            let scratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("pastenext-selftest-merge-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let store = HistoryStore(directory: scratch, load: false)
+            let image = solidImage(.systemTeal, 64, 44)
+
+            // Stage 1: only the picture arrives.
+            let pictureOnly = ClipItem(kind: .image, text: "",
+                                       sourceBundleID: "com.tencent.xinWeChat", imageSize: "64×44")
+            store.mergeOrAdd(pictureOnly, image: image)
+            // Stage 2: only the caption arrives — it must merge into the same card.
+            let captionOnly = ClipItem(kind: .text, text: "图注文字",
+                                       sourceBundleID: "com.tencent.xinWeChat")
+            store.mergeOrAdd(captionOnly, image: nil)
+
+            expect(store.items.count == 1, "staged image+text merges into one card")
+            expect(store.items.first?.captionText == "图注文字", "merge keeps the caption")
+            expect(store.items.first?.imageFilename != nil, "merge keeps the picture")
+            expect(store.items.first?.kind == .image, "merged clip is an image clip")
+
+            // A much later, unrelated copy must NOT merge: `later` is "now"
+            // while `oldPicture` is ten seconds old, so they are 10s apart.
+            let later = ClipItem(kind: .text, text: "另一条",
+                                 sourceBundleID: "com.tencent.xinWeChat")
+            let store2 = HistoryStore(directory: scratch, load: false)
+            let oldPicture = ClipItem(kind: .image, text: "",
+                                      createdAt: Date().addingTimeInterval(-10),
+                                      sourceBundleID: "com.tencent.xinWeChat", imageSize: "64×44")
+            store2.mergeOrAdd(oldPicture, image: image)
+            store2.mergeOrAdd(later, image: nil)
+            expect(store2.items.count == 2, "a copy far apart in time does not merge")
+        }
+
+        // ---- The data the default selection relies on ----------------------
+        // reloadSelection focuses store.items.first, so that must always be the
+        // most recent copy.
+        do {
+            let scratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("pastenext-selftest-order-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let store = HistoryStore(directory: scratch, load: false)
+            store.add(ClipItem(kind: .text, text: "较旧内容"))
+            store.add(ClipItem(kind: .text, text: "最新内容"))
+            expect(store.items.first?.text == "最新内容", "store.items is newest-first")
+        }
+
         // ---- The paste side ------------------------------------------------
         // An image+text clip must put BOTH on the board, so a rich-text target
         // (a WeChat input box, for instance) receives the picture and the words.
         do {
+            // A scratch board, never NSPasteboard.general: the self-test must
+            // not clobber what the user has actually copied.
             let board = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.pasteboth"))
             let img = solidImage(.systemPink, 48, 32)
             let clip = ClipItem(kind: .image, text: "图文一起粘贴", imageSize: "48×32")
@@ -367,7 +435,7 @@ enum SelfTest {
         do {
             let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("PasteNext-selftest-write-\(UUID().uuidString).txt")
             try Data("payload".utf8).write(to: fileURL)
-            let board = NSPasteboard.general
+            let board = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.filewrite"))
             let clip = ClipItem(kind: .files, text: fileURL.lastPathComponent, filePaths: [fileURL.path])
             PasteService.copy(clip, image: nil, monitor: ClipboardMonitor(pasteboard: board), paste: false, pasteboard: board)
             expect(board.propertyList(forType: .init("NSFilenamesPboardType")) as? [String] == [fileURL.path],
