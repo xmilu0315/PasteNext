@@ -109,7 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 let monitor = ClipboardMonitor()
                 var result: (ClipItem, NSImage?)? = nil
-                monitor.onCapture = { item, image in result = (item, image) }
+                monitor.onCapture = { item, image, _ in result = (item, image) }
                 monitor.captureNowForTesting()
                 if let (item, image) = result {
                     log("kind        : \(item.kind.rawValue)")

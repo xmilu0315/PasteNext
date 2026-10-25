@@ -7,6 +7,7 @@ final class HistoryStore: ObservableObject {
     private let directory: URL
     private let historyURL: URL
     private let imagesDirectory: URL
+    private let fragmentsDirectory: URL
     private var saveWork: DispatchWorkItem?
     private let imageCache = NSCache<NSString, NSImage>()
     var limit: Int = 500 { didSet { trim(); scheduleSave() } }
@@ -24,7 +25,9 @@ final class HistoryStore: ObservableObject {
         imageCache.countLimit = 40
         historyURL = dir.appendingPathComponent("history.json")
         imagesDirectory = dir.appendingPathComponent("Images", isDirectory: true)
+        fragmentsDirectory = dir.appendingPathComponent("Fragments", isDirectory: true)
         try? FileManager.default.createDirectory(at: imagesDirectory, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: fragmentsDirectory, withIntermediateDirectories: true)
         if load { self.load() }
     }
 
@@ -41,20 +44,20 @@ final class HistoryStore: ObservableObject {
     /// same app shortly after, and either fills the previous card's missing
     /// half or is a superset of it (same text, plus an image/file). Anything
     /// else is a genuinely new copy and gets its own card.
-    func mergeOrAdd(_ item: ClipItem, image: NSImage? = nil) {
+    func mergeOrAdd(_ item: ClipItem, image: NSImage? = nil, htmlData: Data? = nil) {
         let window: TimeInterval = 8.0
         guard let last = items.first,
               last.sourceBundleID == item.sourceBundleID,
               let gap = Optional(item.createdAt.timeIntervalSince(last.createdAt)),
               gap >= 0, gap < window else {
-            add(item, image: image)
+            add(item, image: image, htmlData: htmlData)
             return
         }
         // A file card is complete on its own. Folding an unrelated image copy
         // into one destroyed the file clip (the paste then carried a picture
         // where the document should have been).
         guard last.kind != .files, item.kind != .files else {
-            add(item, image: image)
+            add(item, image: image, htmlData: htmlData)
             return
         }
 
@@ -71,7 +74,7 @@ final class HistoryStore: ObservableObject {
             (last.captionText == nil || item.captionText == last.captionText)
 
         guard fillsMissingHalf || supersedes else {
-            add(item, image: image)
+            add(item, image: image, htmlData: htmlData)
             return
         }
 
@@ -86,6 +89,9 @@ final class HistoryStore: ObservableObject {
         }
         if let size = item.imageSize { merged.imageSize = size }
         if item.filePaths != nil { merged.filePaths = item.filePaths }
+        if let htmlData, let name = saveFragment(data: htmlData, id: merged.id) {
+            merged.htmlFilename = name
+        }
         if item.title != nil { merged.title = item.title }
         if item.sourceName != nil { merged.sourceName = item.sourceName }
         // First sighting wins on ordering: whichever half arrived first is also
@@ -106,7 +112,7 @@ final class HistoryStore: ObservableObject {
         ])
     }
 
-    func add(_ item: ClipItem, image: NSImage? = nil) {
+    func add(_ item: ClipItem, image: NSImage? = nil, htmlData: Data? = nil) {
         var new = item
         if let existing = items.firstIndex(where: { isSameClip($0, item) }) {
             // The same content is already in the history. Keep the card's
@@ -127,9 +133,30 @@ final class HistoryStore: ObservableObject {
         if let image, new.kind == .image, new.imageFilename == nil {
             new.imageFilename = saveImage(image, id: new.id)
         }
+        if let htmlData, let name = saveFragment(data: htmlData, id: new.id) {
+            new.htmlFilename = name
+        }
         items.insert(new, at: 0)
         trim()
         scheduleSave()
+    }
+
+    /// Stores the original HTML payload next to the clip and returns its name.
+    func saveFragment(data: Data, id: UUID) -> String? {
+        let name = "\(id.uuidString).html"
+        do {
+            try data.write(to: fragmentsDirectory.appendingPathComponent(name), options: .atomic)
+            return name
+        } catch {
+            Diagnostics.log("fragment.save.failed", ["error": error.localizedDescription])
+            return nil
+        }
+    }
+
+    /// The archived HTML payload, if this clip has one.
+    func fragment(named name: String?) -> Data? {
+        guard let name else { return nil }
+        return try? Data(contentsOf: fragmentsDirectory.appendingPathComponent(name))
     }
 
     /// Attaches a late-arriving remote image to an existing clip.

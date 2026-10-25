@@ -51,9 +51,9 @@ final class AppState: ObservableObject {
             Task { @MainActor in self?.previousApp = app }
         }
         store.limit = max(50, UserDefaults.standard.integer(forKey: "historyLimit") == 0 ? 500 : UserDefaults.standard.integer(forKey: "historyLimit"))
-        monitor.onCapture = { [weak self] item, image in
+        monitor.onCapture = { [weak self] item, image, html in
             guard let self else { return }
-            self.store.mergeOrAdd(item, image: image)
+            self.store.mergeOrAdd(item, image: image, htmlData: html)
             self.captureCount += 1
             self.selectedID = self.store.items.first(where: { existing in
                 if existing.kind != item.kind { return false }
@@ -237,7 +237,8 @@ final class AppState: ObservableObject {
         if shouldPaste {
             NotificationCenter.default.post(name: .hidePasteNextPanel, object: nil)
         }
-        PasteService.copy(item, image: store.image(for: item), monitor: monitor, paste: shouldPaste, plainText: plainText)
+        PasteService.copy(item, image: store.image(for: item), monitor: monitor, paste: shouldPaste,
+                          plainText: plainText, htmlFragment: store.fragment(named: item.htmlFilename))
         statusMessage = shouldPaste ? L("已粘贴", "Pasted") : L("已复制到剪贴板", "Copied to clipboard")
     }
     /// ⌘1…⌘9 map onto the most recent **non-pinned** clips. Pinned cards are

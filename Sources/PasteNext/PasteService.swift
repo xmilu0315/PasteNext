@@ -10,7 +10,7 @@ enum PasteService {
     /// the user's history.
     static var statusSink: ((String) -> Void)?
     static func copy(_ item: ClipItem, image: NSImage?, monitor: ClipboardMonitor, paste: Bool, plainText: Bool = false,
-                     pasteboard: NSPasteboard = .general) {
+                     pasteboard: NSPasteboard = .general, htmlFragment: Data? = nil) {
         let pb = pasteboard
         monitor.ignoreNextWrite()
         pb.clearContents()
@@ -56,7 +56,16 @@ enum PasteService {
                 // picture in one paste. Without it the target just takes the
                 // image flavour and the words are lost.
                 if let caption = item.captionText {
-                    if writeRichText(text: caption, image: image, textFirst: item.textFirst, to: pb) {
+                    // Replaying the original HTML keeps the source's own order,
+                    // structure and formatting; the captured picture is inlined
+                    // because the markup only references it by URL.
+                    if let htmlFragment, let replayed = replayHTML(htmlFragment, image: image) {
+                        if pb.setString(replayed, forType: .html) { wrote = true }
+                        if let rtf = rtf(fromHTML: replayed), pb.setData(rtf, forType: .rtf) { wrote = true }
+                        else if writeRichText(text: caption, image: image,
+                                              textFirst: item.textFirst, to: pb) { wrote = true }
+                    } else if writeRichText(text: caption, image: image,
+                                           textFirst: item.textFirst, to: pb) {
                         wrote = true
                     }
                 }
@@ -166,6 +175,39 @@ enum PasteService {
             if pb.setString(html, forType: .html) { wrote = true }
         }
         return wrote
+    }
+
+    /// Rebuilds the archived HTML with the captured picture inlined, so the
+    /// paste reproduces the source document instead of a reconstruction.
+    private static func replayHTML(_ data: Data, image: NSImage) -> String? {
+        guard var html = String(data: data, encoding: .utf8), !html.isEmpty,
+              let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]),
+              png.count <= 8_000_000 else { return nil }
+        let dataURI = "data:image/png;base64," + png.base64EncodedString()
+        // Point the first <img> at the captured bytes; leave the rest alone.
+        if let range = html.range(of: "src\\s*=\\s*[\"'][^\"']*[\"']",
+                                  options: [.regularExpression, .caseInsensitive]) {
+            html.replaceSubrange(range, with: "src=\"\(dataURI)\"")
+        } else {
+            return nil
+        }
+        return html
+    }
+
+    /// Converts HTML into RTF so word processors get the same structure.
+    private static func rtf(fromHTML html: String) -> Data? {
+        guard let data = html.data(using: .utf8),
+              let attributed = try? NSAttributedString(
+                data: data,
+                options: [.documentType: NSAttributedString.DocumentType.html,
+                          .characterEncoding: String.Encoding.utf8.rawValue],
+                documentAttributes: nil),
+              attributed.length > 0 else { return nil }
+        return try? attributed.data(
+            from: NSRange(location: 0, length: attributed.length),
+            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])
     }
 
     /// RTF with an embedded PNG, honouring the copied order.

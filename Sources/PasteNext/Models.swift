@@ -51,13 +51,17 @@ struct ClipItem: Codable, Identifiable, Equatable {
     /// and rich-text apps put them in a specific order; the card and the pasted
     /// payload must both respect it instead of always drawing the picture first.
     var textFirst: Bool = false
+    /// Sidecar file holding the original `public.html` payload, so a paste can
+    /// replay exactly what the source app put on the board.
+    var htmlFilename: String? = nil
 
     var itemTags: [String] { tags ?? [] }
 
     /// Explicit keys so the decoder below can be tolerant.
     enum CodingKeys: String, CodingKey {
         case id, kind, text, createdAt, isPinned, title, sourceBundleID, sourceName,
-             sourcePath, isRemote, imageFilename, filePaths, tags, sortIndex, imageSize, textFirst
+             sourcePath, isRemote, imageFilename, filePaths, tags, sortIndex, imageSize,
+             textFirst, htmlFilename
     }
 
     /// Tolerant decoding.
@@ -84,6 +88,7 @@ struct ClipItem: Codable, Identifiable, Equatable {
         tags = try c.decodeIfPresent([String].self, forKey: .tags)
         sortIndex = try c.decodeIfPresent(Double.self, forKey: .sortIndex)
         imageSize = try c.decodeIfPresent(String.self, forKey: .imageSize)
+        htmlFilename = try c.decodeIfPresent(String.self, forKey: .htmlFilename)
     }
 
     /// Memberwise initialiser kept explicit because the custom decoder above
@@ -92,7 +97,8 @@ struct ClipItem: Codable, Identifiable, Equatable {
          isPinned: Bool = false, title: String? = nil, sourceBundleID: String? = nil,
          sourceName: String? = nil, sourcePath: String? = nil, isRemote: Bool = false,
          imageFilename: String? = nil, filePaths: [String]? = nil, tags: [String]? = nil,
-         sortIndex: Double? = nil, imageSize: String? = nil, textFirst: Bool = false) {
+         sortIndex: Double? = nil, imageSize: String? = nil, textFirst: Bool = false,
+         htmlFilename: String? = nil) {
         self.id = id
         self.kind = kind
         self.text = text
@@ -109,6 +115,7 @@ struct ClipItem: Codable, Identifiable, Equatable {
         self.sortIndex = sortIndex
         self.imageSize = imageSize
         self.textFirst = textFirst
+        self.htmlFilename = htmlFilename
     }
     var effectiveSortIndex: Double { sortIndex ?? createdAt.timeIntervalSinceReferenceDate }
     /// The text this clip carries, if any.

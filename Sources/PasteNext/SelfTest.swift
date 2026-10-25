@@ -53,7 +53,7 @@ enum SelfTest {
             let monitor = ClipboardMonitor(pasteboard: board)
             var captured: ClipItem?
             var capturedImage: NSImage?
-            monitor.onCapture = { item, image in captured = item; capturedImage = image }
+            monitor.onCapture = { item, image, _ in captured = item; capturedImage = image }
             monitor.captureNowForTesting()
             expect(captured?.kind == .image, "screenshot pasteboard classified as image")
             expect(capturedImage != nil, "screenshot pixels materialized")
@@ -75,7 +75,7 @@ enum SelfTest {
                 board.writeObjects([pasteboardItem])
                 let monitor = ClipboardMonitor(pasteboard: board)
                 var captured: ClipItem?
-                monitor.onCapture = { item, _ in captured = item }
+                monitor.onCapture = { item, _, _ in captured = item }
                 monitor.captureNowForTesting()
                 expect(captured?.kind == .image, "PixPin file-URL screenshot classified as image")
                 try? FileManager.default.removeItem(at: fileURL)
@@ -89,7 +89,7 @@ enum SelfTest {
                 wrappedBoard.writeObjects([wrappedItem])
                 let wrappedMonitor = ClipboardMonitor(pasteboard: wrappedBoard)
                 var wrappedCapture: ClipItem?
-                wrappedMonitor.onCapture = { item, _ in wrappedCapture = item }
+                wrappedMonitor.onCapture = { item, _, _ in wrappedCapture = item }
                 wrappedMonitor.captureNowForTesting()
                 expect(wrappedCapture?.kind == .image, "PixPin private MIME screenshot classified as image")
             } catch {
@@ -110,7 +110,7 @@ enum SelfTest {
                 fileBoard.writeObjects([fileItem])
                 let fileMonitor = ClipboardMonitor(pasteboard: fileBoard)
                 var fileCapture: ClipItem?
-                fileMonitor.onCapture = { item, _ in fileCapture = item }
+                fileMonitor.onCapture = { item, _, _ in fileCapture = item }
                 fileMonitor.captureNowForTesting()
                 expect(fileCapture?.kind == .files, "Finder file copy stays a file")
                 expect(fileCapture?.filePaths?.first == docURL.path, "Finder file copy keeps its path")
@@ -132,7 +132,7 @@ enum SelfTest {
                 pathBoard.writeObjects([pathItem])
                 let pathMonitor = ClipboardMonitor(pasteboard: pathBoard)
                 var pathCapture: ClipItem?
-                pathMonitor.onCapture = { item, _ in pathCapture = item }
+                pathMonitor.onCapture = { item, _, _ in pathCapture = item }
                 pathMonitor.captureNowForTesting()
                 expect(pathCapture?.kind == .files, "path-only clipboard captured as file")
                 expect(pathCapture?.filePaths?.first == docURL.path, "path-only clipboard keeps its path")
@@ -172,7 +172,7 @@ enum SelfTest {
             board.writeObjects([item])
             let monitor = ClipboardMonitor(pasteboard: board)
             var captured: ClipItem?
-            monitor.onCapture = { clip, image in captured = clip; _ = image }
+            monitor.onCapture = { clip, image, _ in captured = clip; _ = image }
             monitor.captureNowForTesting()
             expect(captured?.kind == .image, "image+text copy is an image clip")
             expect(captured?.captionText == "60度的蔚来萤火虫电池！值不值？",
@@ -202,7 +202,7 @@ enum SelfTest {
             board.writeObjects([pi])
             let monitor = ClipboardMonitor(pasteboard: board)
             var captured: ClipItem?
-            monitor.onCapture = { clip, _ in captured = clip }
+            monitor.onCapture = { clip, _, _ in captured = clip }
             monitor.captureNowForTesting()
             expect(captured?.kind == .image, "HTML-embedded image is detected")
             expect(captured?.captionText == "captioned text", "HTML clip keeps its text")
@@ -234,7 +234,7 @@ enum SelfTest {
             defer { scratch.forEach { try? FileManager.default.removeItem(at: $0) } }
             let monitor = ClipboardMonitor(pasteboard: board)
             var result: (ClipItem, NSImage?)? = nil
-            monitor.onCapture = { item, image in result = (item, image) }
+            monitor.onCapture = { item, image, _ in result = (item, image) }
             monitor.captureNowForTesting()
             return (result?.0, result?.1)
         }
@@ -355,7 +355,7 @@ enum SelfTest {
             board.writeObjects([item])
             let monitor = ClipboardMonitor(pasteboard: board)
             var captured: ClipItem?
-            monitor.onCapture = { clip, _ in captured = clip }
+            monitor.onCapture = { clip, _, _ in captured = clip }
             monitor.captureNowForTesting()
             expect(captured?.text == "测试文本ABC",
                    "UTF-16 text decodes correctly (not mojibake), got: \(captured?.text ?? "nil")")
@@ -462,7 +462,7 @@ enum SelfTest {
             board.writeObjects([item])
             let monitor = ClipboardMonitor(pasteboard: board)
             var captured: ClipItem?
-            monitor.onCapture = { clip, _ in captured = clip }
+            monitor.onCapture = { clip, _, _ in captured = clip }
             monitor.captureNowForTesting()
             expect(captured?.text == "iPhone 17 蔚来",
                    "UTF-16LE without BOM decodes correctly, got: \(captured?.text ?? "nil")")
@@ -528,7 +528,7 @@ enum SelfTest {
                 board.writeObjects([item])
                 let monitor = ClipboardMonitor(pasteboard: board)
                 var captured: ClipItem?
-                monitor.onCapture = { clip, _ in captured = clip }
+                monitor.onCapture = { clip, _, _ in captured = clip }
                 // The fetch is asynchronous by design (never on the capture path):
                 // the card is created text-only, then the picture lands via
                 // onRemoteImage and the card updates in place.
@@ -580,7 +580,7 @@ enum SelfTest {
                 board.writeObjects([item])
                 let monitor = ClipboardMonitor(pasteboard: board)
                 var captured: ClipItem?
-                monitor.onCapture = { clip, _ in captured = clip }
+                monitor.onCapture = { clip, _, _ in captured = clip }
                 monitor.captureNowForTesting()
                 return captured
             }
@@ -623,6 +623,26 @@ enum SelfTest {
             let textAt2 = reversed.range(of: "图注文字")?.lowerBound
             let imgAt2 = reversed.range(of: "<img")?.lowerBound
             expect(textAt2 != nil && imgAt2 != nil && imgAt2! < textAt2!, "picture-first order is preserved")
+        }
+
+        // ---- Replaying the original HTML -----------------------------------
+        // The archived markup is the only faithful record of the source's own
+        // order; the paste inlines the captured picture into it.
+        do {
+            let source = "<html><body><p>文字在前的一段话</p><img src=\"https://example.com/pic.png\"></body></html>"
+            let board = NSPasteboard(name: NSPasteboard.Name("com.pastenext.selftest.replay"))
+            let image = solidImage(.systemBlue, 48, 32)
+            let clip = ClipItem(kind: .image, text: "文字在前的一段话", imageSize: "48×32", textFirst: true)
+            PasteService.copy(clip, image: image, monitor: ClipboardMonitor(pasteboard: board),
+                              paste: false, pasteboard: board,
+                              htmlFragment: source.data(using: .utf8))
+            let out = board.string(forType: .html) ?? ""
+            expect(out.contains("data:image/png;base64,"), "replay inlines the captured picture")
+            let textAt = out.range(of: "文字在前的一段话")?.lowerBound
+            let imgAt = out.range(of: "<img")?.lowerBound
+            expect(textAt != nil && imgAt != nil && textAt! < imgAt!,
+                   "replay keeps the source order (text before picture)")
+            expect(!out.contains("example.com"), "replay drops the dead remote URL")
         }
 
         // ---- The paste side ------------------------------------------------

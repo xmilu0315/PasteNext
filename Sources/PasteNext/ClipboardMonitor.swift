@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 @MainActor
 final class ClipboardMonitor: ObservableObject {
     @Published var isPaused = false
-    var onCapture: ((ClipItem, NSImage?) -> Void)?
+    var onCapture: ((ClipItem, NSImage?, Data?) -> Void)?
     var onSound: (() -> Void)?
     /// Delivered when a remote `<img>` finishes downloading after the clip was
     /// already captured. The card is updated in place.
@@ -177,7 +177,7 @@ final class ClipboardMonitor: ObservableObject {
         var textFirst = false
         if kind == .image, !contentText.isEmpty {
             if let html = htmlPayload() {
-                textFirst = textPrecedesImage(in: html)
+                textFirst = textPrecedesImage(in: html, text: contentText)
             }
         }
         let item = ClipItem(
@@ -236,7 +236,7 @@ final class ClipboardMonitor: ObservableObject {
         // Hand over the picture whenever there is one. Finder puts an icon
         // preview on the board for a file copy, and that is not the content,
         // so plain file clips still pass nil.
-        onCapture?(item, kind == .files ? nil : image)
+        onCapture?(item, kind == .files ? nil : image, htmlPayload()?.data(using: .utf8))
     }
 
     private func bundleIsOwnApp(_ bundle: String?) -> Bool {
@@ -540,14 +540,22 @@ final class ClipboardMonitor: ObservableObject {
         return nil
     }
 
-    /// True when visible text appears before the first `<img>` in the document.
-    private func textPrecedesImage(in html: String) -> Bool {
-        guard let imgRange = html.range(of: "<img", options: .caseInsensitive) else {
+    /// True when the caption sits before the picture in the markup.
+    ///
+    /// The check locates the *actual* text in the document rather than merely
+    /// asking whether any text precedes the image: a browser fragment often
+    /// starts with a `<meta>`/`<span>` wrapper, so "is there visible text
+    /// before `<img`" can be true for whitespace alone.
+    private func textPrecedesImage(in html: String, text: String) -> Bool {
+        guard let imgIndex = html.range(of: "<img", options: .caseInsensitive)?.lowerBound else {
             // No picture in the markup: the text is the whole content.
             return true
         }
-        let head = String(html[html.startIndex..<imgRange.lowerBound])
-        // Strip tags, then look for anything that is not whitespace.
+        let probe = String(text.prefix(24)).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !probe.isEmpty, let textRange = html.range(of: probe) {
+            return textRange.lowerBound < imgIndex
+        }
+        let head = String(html[html.startIndex..<imgIndex])
         let stripped = head.replacingOccurrences(of: "<[^>]+>", with: " ",
                                                  options: .regularExpression)
         return stripped.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.inverted) != nil
