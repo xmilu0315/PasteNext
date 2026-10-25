@@ -29,3 +29,7 @@ node_modules/
 # ---- Design drafts (not needed to build) ----
 # 图标候选稿共 14MB，仓库只保留最终资源
 Resources/IconOptions/
+
+# ---- Generated at build time (scripts/make-dmg-background.swift) ----
+Resources/dmg-background.png
+Resources/dmg-background@2x.png

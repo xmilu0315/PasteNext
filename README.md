@@ -236,6 +236,7 @@ PasteNext 是一款常驻菜单栏的 macOS 剪贴板历史工具。它轻量轮
 - 路径：`~/Library/Application Support/PasteNext/`
   - `history.json`：条目元数据（`Codable`）
   - `Images/`：图片条目落盘的 PNG
+  - `Fragments/`：捕获时存档的原始 HTML（粘贴时原样重放，保留源文档的顺序与格式）
 - 写入策略：防抖 0.35s 后原子写（`.atomic`），避免高频捕获时的 IO 抖动。
 - 裁剪：超过上限时优先保留置顶条目。
 - 图片缓存：`NSCache` 限制 40 张，避免内存膨胀。
@@ -320,9 +321,8 @@ PasteNext/
 │   ├── AppIcon.svg                图标矢量母版
 │   ├── AppIcon-1024.png           图标母版位图
 │   ├── donate-wechat.png          捐赠收款码（应用内「关于」页使用）
-│   ├── donate-alipay.png          捐赠收款码
-│   ├── dmg-background.png         DMG 拖拽引导底图
-│   └── PasteNext.iconset/         icns 中间产物
+│   └── donate-alipay.png          捐赠收款码
+│       （dmg-background.png 由 make-dmg-background.swift 在构建时生成，不入库）
 ├── screenshots/                   README 与上架用界面截图
 ├── Sources/PasteNext/
 │   ├── PasteNextApp.swift         入口、AppDelegate、菜单栏、调试开关
@@ -366,7 +366,7 @@ PasteNext/
 # 调试构建
 swift build
 
-# 运行内置自检（71 条断言）
+# 运行内置自检（约 160 条断言，运行时打印实际通过数）
 .build/debug/PasteNext --self-test
 
 # release 构建 + 临时签名 + 打包为 DMG（通用二进制）

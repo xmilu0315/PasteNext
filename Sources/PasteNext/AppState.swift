@@ -99,7 +99,6 @@ final class AppState: ObservableObject {
         }
     }
 
-    func select(_ item: ClipItem) { selectedID = item.id }
     /// Called every time the panel opens.
     ///
     /// Always focus the most recent copy, so Return or ⌘1 pastes it right away.
@@ -123,7 +122,6 @@ final class AppState: ObservableObject {
         return filteredItems.first
     }
     func isSelected(_ id: ClipItem.ID) -> Bool { selectedIDs.contains(id) }
-    func selectedClipItems() -> [ClipItem] { filteredItems.filter { selectedIDs.contains($0.id) } }
     func targetIDs(including id: ClipItem.ID) -> [ClipItem.ID] {
         selectedIDs.contains(id) && selectedIDs.count > 1 ? Array(selectedIDs) : [id]
     }
