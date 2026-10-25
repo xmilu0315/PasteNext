@@ -233,13 +233,12 @@ final class AppState: ObservableObject {
         return nil
     }
 
-    func paste(_ item: ClipItem, shouldPaste: Bool = true, plainText: Bool = false) {
-        if shouldPaste {
-            NotificationCenter.default.post(name: .hidePasteNextPanel, object: nil)
-        }
-        PasteService.copy(item, image: store.image(for: item), monitor: monitor, paste: shouldPaste,
+    /// Writes the clip to the pasteboard and delivers ⌘V to the target app.
+    func paste(_ item: ClipItem, plainText: Bool = false) {
+        NotificationCenter.default.post(name: .hidePasteNextPanel, object: nil)
+        PasteService.copy(item, image: store.image(for: item), monitor: monitor, paste: true,
                           plainText: plainText, htmlFragment: store.fragment(named: item.htmlFilename))
-        statusMessage = shouldPaste ? L("已粘贴", "Pasted") : L("已复制到剪贴板", "Copied to clipboard")
+        statusMessage = L("已粘贴", "Pasted")
     }
     /// ⌘1…⌘9 map onto the most recent **non-pinned** clips. Pinned cards are
     /// permanent fixtures at the top of the list; giving them shortcut slots
@@ -268,12 +267,6 @@ final class AppState: ObservableObject {
         paste(items[index], plainText: plainText)
     }
 
-    func copyPath(_ item: ClipItem) {
-        monitor.ignoreNextWrite()
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(item.plainTextRepresentation, forType: .string)
-        statusMessage = L("已复制路径", "Path copied")
-    }
 
     func addTag(_ name: String) {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)

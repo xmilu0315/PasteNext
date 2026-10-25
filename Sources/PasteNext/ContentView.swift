@@ -306,10 +306,6 @@ struct ContentView: View {
             Label(isFile ? L("粘贴为路径", "Paste as Path") : L("粘贴为纯文本", "Paste as Plain Text"),
                   systemImage: isFile ? "folder" : "textformat")
         }
-        if isFile {
-            Button { state.copyPath(item) } label: { Label(L("仅复制路径", "Copy Path Only"), systemImage: "doc.on.doc") }
-        }
-        Button { state.paste(item, shouldPaste: false) } label: { Label(L("仅复制", "Copy"), systemImage: "doc.on.doc") }
         Divider()
         Button { state.togglePin(ids: targets) } label: {
             Label(pinTitle(for: targets), systemImage: pinSymbol(for: targets))

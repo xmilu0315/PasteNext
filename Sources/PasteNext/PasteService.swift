@@ -9,6 +9,17 @@ enum PasteService {
     /// history store inside any debug/secondary process and let it overwrite
     /// the user's history.
     static var statusSink: ((String) -> Void)?
+    /// Writes a clip to the pasteboard.
+    ///
+    /// - Parameters:
+    ///   - paste: whether to also deliver ⌘V to the target app. Production
+    ///     always passes true; the self-test passes false so it never types into
+    ///     whatever app happens to be frontmost.
+    ///   - plainText: values only — file clips become their paths, everything
+    ///     else its words, with no picture or markup.
+    ///   - pasteboard: injectable so tests never touch the user's clipboard.
+    ///   - htmlFragment: the archived markup for this clip, replayed on paste so
+    ///     the source's own order and formatting survive.
     static func copy(_ item: ClipItem, image: NSImage?, monitor: ClipboardMonitor, paste: Bool, plainText: Bool = false,
                      pasteboard: NSPasteboard = .general, htmlFragment: Data? = nil) {
         let pb = pasteboard
