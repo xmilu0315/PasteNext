@@ -46,6 +46,14 @@ final class AppState: ObservableObject {
 
     init() {
         CaptureSound.migrateStoredValue()
+        // One-time: the app no longer pre-excludes any app. Older builds wrote
+        // their default list into this key, so clear it once — anything the user
+        // adds afterwards is kept.
+        let resetKey = "ignoredAppsResetForNoDefaults"
+        if !UserDefaults.standard.bool(forKey: resetKey) {
+            UserDefaults.standard.removeObject(forKey: "ignoredApps")
+            UserDefaults.standard.set(true, forKey: resetKey)
+        }
         UserDefaults.standard.removeObject(forKey: "menuBarIconStyle")
         normalizeTabs()
         // Remember the last app that was in front besides PasteNext. Sampling it

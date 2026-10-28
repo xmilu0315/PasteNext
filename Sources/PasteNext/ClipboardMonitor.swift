@@ -10,16 +10,19 @@ final class ClipboardMonitor: ObservableObject {
     /// Delivered when a remote `<img>` finishes downloading after the clip was
     /// already captured. The card is updated in place.
     var onRemoteImage: ((UUID, NSImage) -> Void)?
-    @Published var ignoredBundleIDs: Set<String> = ["com.agilebits.onepassword", "com.1password.1password", "net.antelle.keeweb"]
+    /// Apps whose copies are never recorded. Empty by default — the user decides
+    /// what to skip, so nothing is pre-excluded.
+    @Published var ignoredBundleIDs: Set<String> = []
     private let pasteboard: NSPasteboard
     private var timer: Timer?
     private var lastChangeCount = 0
     private var pendingCount: Int?
     private var ignoredCounts: Set<Int> = []
+    /// Content a source app itself marked as secret (the cross-app convention
+    /// from nspasteboard.org). No app-specific markers: skipping those was the
+    /// "exclude password managers" rule the user asked to drop.
     private let concealedTypes: [NSPasteboard.PasteboardType] = [
-        .init("org.nspasteboard.ConcealedType"),
-        .init("com.agilebits.onepassword"),
-        .init("net.antelle.keeweb")
+        .init("org.nspasteboard.ConcealedType")
     ]
     private let transientTypes: [NSPasteboard.PasteboardType] = [
         .init("org.nspasteboard.TransientType"),

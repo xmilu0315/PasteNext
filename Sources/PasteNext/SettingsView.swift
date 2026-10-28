@@ -147,8 +147,6 @@ struct SettingsView: View {
                 Text(L("始终跳过密码管理器标记的敏感内容、临时内容与自动生成内容。所有历史仅保存在本机，不上传。", "Sensitive, transient and auto-generated clips marked by source apps are always skipped. History stays on this Mac; no upload."))
                     .font(.callout).fixedSize(horizontal: false, vertical: true)
                 excludedAppsEditor
-                Text(L("默认排除 1Password 与 KeeWeb。接力内容默认正常记录并标注 iPhone 来源。", "1Password and KeeWeb are excluded by default. Universal Clipboard is recorded and marked with an iPhone icon."))
-                    .font(.caption).foregroundColor(.secondary)
             } header: { Text(L("剪贴板隐私", "Clipboard Privacy")) }
             Section {
                 permissionRow(
