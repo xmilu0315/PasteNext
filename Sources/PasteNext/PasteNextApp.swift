@@ -2,23 +2,38 @@ import AppKit
 import QuartzCore
 import SwiftUI
 
+/// Explicit AppKit entry point.
+///
+/// A SwiftUI `App` whose only scene is `Settings` makes macOS open that window
+/// at launch — which is exactly wrong for a menu-bar utility that should appear
+/// silently. Driving `NSApplication` directly means nothing is shown until the
+/// user asks: no window, no Dock icon, just the status item.
 @main
-struct PasteNextApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var state = AppState.shared
+@MainActor
+enum PasteNextLauncher {
+    /// Held for the process lifetime: `NSApplication.delegate` is weak.
+    private static var appDelegate: AppDelegate?
 
-    init() {
-        if CommandLine.arguments.contains("--self-test") { SelfTest.run() }
-    }
-
-    var body: some Scene {
-        Settings { SettingsView(state: state) }
+    static func main() {
+        // Touch NSApplication first: the pasteboard services the self-test
+        // exercises are not available before AppKit is initialised.
+        let application = NSApplication.shared
+        if CommandLine.arguments.contains("--self-test") {
+            SelfTest.run()
+            return
+        }
+        let delegate = AppDelegate()
+        appDelegate = delegate
+        application.delegate = delegate
+        application.setActivationPolicy(.accessory)
+        application.run()
     }
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem?
+    private var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -26,9 +41,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PanelController.shared.anchorProvider = { [weak self] in self?.statusButtonScreenFrame() }
         HotKeyManager.shared.onActivate = { PanelController.shared.toggle() }
         HotKeyManager.shared.register()
+        // Boot the shared state: its init starts clipboard monitoring and loads
+        // the history. Nothing else creates it until the user opens the panel,
+        // so without this the app would sit in the menu bar doing nothing.
+        let state = AppState.shared
         let ignored = UserDefaults.standard.string(forKey: "ignoredApps") ?? ""
         if !ignored.isEmpty {
-            AppState.shared.monitor.ignoredBundleIDs = Set(ignored.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+            state.monitor.ignoredBundleIDs = Set(ignored.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
         }
         NotificationCenter.default.addObserver(forName: .showPasteNextSettings, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.openSettings() }
@@ -227,8 +246,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showPanel() { PanelController.shared.show() }
     @objc private func togglePause() { AppState.shared.monitor.isPaused.toggle() }
     @objc private func openSettings() {
+        if settingsWindow == nil {
+            let hosting = NSHostingController(rootView: SettingsView(state: AppState.shared))
+            let window = NSWindow(contentViewController: hosting)
+            window.title = L("PasteNext 设置", "PasteNext Settings")
+            window.styleMask = [.titled, .closable, .miniaturizable]
+            window.isReleasedWhenClosed = false
+            // Never let macOS restore this window on the next launch.
+            window.isRestorable = false
+            window.delegate = self
+            window.center()
+            settingsWindow = window
+        }
+        // A menu-bar-only app has no Dock icon; show one while the window is up
+        // so it can take focus like a normal window.
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Returning to `.accessory` keeps the Dock clear once settings is closed.
+    func windowWillClose(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === settingsWindow else { return }
+        NSApp.setActivationPolicy(.accessory)
     }
     @objc private func quit() { NSApp.terminate(nil) }
 }
