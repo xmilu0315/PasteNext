@@ -4,7 +4,7 @@
 
 PasteNext 是一款常驻菜单栏的 macOS 剪贴板历史工具。它轻量轮询 `NSPasteboard.changeCount`，**只在剪贴板真正变化时**才读取内容，自动把文本、代码、链接、颜色、图片和文件分类归档；配合全局快捷键即可秒级回取任何刚复制过的东西。
 
-- **版本**：1.4.0
+- **版本**：1.4.1
 - **系统要求**：macOS 13 (Ventura) 及以上 · 通用二进制（Apple Silicon / Intel 均可运行）
 - **技术栈**：Swift 5.9 / SwiftUI + AppKit / Swift Package Manager
 - **依赖**：无第三方库（仅系统框架 AppKit、SwiftUI、Carbon、CoreGraphics）
@@ -397,7 +397,7 @@ PasteNext/
 │   ├── make-dmg-background.swift   DMG 拖拽引导底图生成
 │   ├── make-donation-qr.swift      捐赠收款码裁切与统一样式
 │   └── dmg/                        DMG 打包与布局校验工具
-└── Dist/PasteNext-1.4.0.dmg       可分发安装镜像（DMG）
+└── Dist/PasteNext-1.4.1.dmg       可分发安装镜像（DMG）
 ```
 
 > 上架素材（海报、文案）与海报生成脚本存放在独立工作区 `PasteNext 营销/`，不纳入本仓库。
@@ -415,7 +415,7 @@ swift build
 
 # release 构建 + 临时签名 + 打包为 DMG（通用二进制）
 ./scripts/build-app.sh
-# 产物：Dist/PasteNext-1.4.0.dmg
+# 产物：Dist/PasteNext-1.4.1.dmg
 # DMG 内含 PasteNext.app、/Applications 软链接与安装说明
 
 # 重新生成矢量应用图标
